@@ -1,0 +1,5 @@
+/mkgbi/mkgbi
+/ppm2bnr/ppm2bnr
+*.bin
+*.elf
+*.o

@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
+#include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -44,7 +46,7 @@ static void default_disk_header(struct gcm_disk_header *dh)
 {
 	memset(dh, 0, sizeof(*dh));
 
-	memcpy(dh->info.game_code, "GBLP", 4);	/*Gamecube BootLoader PAL */
+	memcpy(dh->info.game_code, "GBLA", 4);	/* Gamecube BootLoader */
 	memcpy(dh->info.maker_code, "GL", 2);	/* gc-linux */
 	dh->info.magic = cpu_to_be32(0xc2339f3d);
 
@@ -66,7 +68,7 @@ static void default_disk_header_info(struct gcm_disk_header_info *dhi)
 	memset(dhi, 0, sizeof(*dhi));
 
 	dhi->simulated_memory_size = cpu_to_be32(0x01800000);
-	dhi->country_code = cpu_to_be32(1); /* 1=ntsc, 2=pal */
+	dhi->country_code = cpu_to_be32(3); /* 0=jap 1=usa, 2=eur 3=ODE */
 	dhi->unknown_1 = cpu_to_be32(1);
 }
 
@@ -77,7 +79,7 @@ static void default_apploader_header(struct gcm_apploader_header *ah)
 {
 	memset(ah, 0, sizeof(*ah));
 
-	memcpy(ah->date, "2021/10/06", 10);
+	memcpy(ah->date, "2022/09/30", 10);
 	ah->entry_point = 0x81200000;	/* gets proper endianness later */
 }
 
