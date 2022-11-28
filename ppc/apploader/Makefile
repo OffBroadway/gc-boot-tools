@@ -10,11 +10,10 @@ DOLTOOL = doltool
 
 CFLAGS := -O2
 
-
 apploader_entry_point = 81200000
 
 
-apploader_C_SRCS = apploader.c
+apploader_C_SRCS = apploader.c libc.c tinyprintf.c usbgecko.c
 apploader_C_OBJS = $(patsubst %.c, %.o, $(apploader_C_SRCS))
 
 apploader_SRCS = $(apploader_C_SRCS)
@@ -33,7 +32,7 @@ apploader.bin: apploader.elf
 	$(OBJCOPY) --strip-all -O binary $< $@
 
 apploader.elf: $(apploader_OBJS)
-	$(CC) -nostartfiles -nodefaultlibs -Wl,-Ttext=$(apploader_entry_point) -Wl,-e,al_start -Wl,-T,apploader_ldscript.txt $(apploader_OBJS) -o $@
+	$(CC) -nostartfiles -nodefaultlibs -Wl,-Ttext=$(apploader_entry_point) -Wl,-e,al_start -Wl,--defsym,EXI=0xCC006800 -Wl,-T,apploader_ldscript.txt $(apploader_OBJS) -o $@
 
 $(apploader_C_OBJS): %.o: %.c
 	$(CC) $(CFLAGS) -fno-builtin -fno-toplevel-reorder -c $< -o $@

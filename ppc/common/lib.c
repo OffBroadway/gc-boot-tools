@@ -11,6 +11,7 @@
  *
  */
 
+#include "../apploader/usbgecko.h"
 #include "../include/system.h"
 
 void *memcpy(void *dest, const void *src, int count)
@@ -56,6 +57,7 @@ void rumble_on(void)
 
 void panic(char *text)
 {
+	gprintf(text);
 	rumble(1);
 	for (;;) ;
 }

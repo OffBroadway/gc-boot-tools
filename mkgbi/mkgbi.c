@@ -68,7 +68,7 @@ static void default_disk_header_info(struct gcm_disk_header_info *dhi)
 	memset(dhi, 0, sizeof(*dhi));
 
 	dhi->simulated_memory_size = cpu_to_be32(0x01800000);
-	dhi->country_code = cpu_to_be32(3); /* 0=jap 1=usa, 2=eur 3=ODE */
+	dhi->country_code = cpu_to_be32(3); /* 0=jap 1=usa 2=eur 3=ODE */
 	dhi->unknown_1 = cpu_to_be32(1);
 }
 

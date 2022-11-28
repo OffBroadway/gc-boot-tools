@@ -3,3 +3,6 @@
 *.bin
 *.elf
 *.o
+*.iso
+gbi.hdr
+.vscode/

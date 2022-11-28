@@ -15,8 +15,6 @@
  *
  */
 
-#define PATCH_IPL 1
-
 #include <stddef.h>
 #include <string.h>
 
@@ -24,6 +22,8 @@
 
 #include "../../include/gcm.h"
 #include "../../include/dol.h"
+
+#include "usbgecko.h"
 
 #define DI_ALIGN_SHIFT	5
 #define DI_ALIGN_SIZE	(1UL << DI_ALIGN_SHIFT)
@@ -159,30 +159,37 @@ static struct bootloader_control bl_control = { .size = ~0 };
 static unsigned char di_buffer[DI_SECTOR_SIZE] __attribute__ ((aligned(32))) =
 	"www.gc-linux.org";
 
-#if PATCH_IPL
-static void patch_ipl(void);
-static void skip_ipl_animation(void);
-#endif
+int DVD_LowRead64(void* dst, uint32_t len, uint64_t offset);
 
 /*
  * This is our particular "main".
  * It _must_ be the first function in this file.
  */
-void al_start(void **enter, void **load, void **exit)
-{
-	al_control.step = 0;
+void al_start(void **enter, void **load, void **exit) {
+	al_enter(NULL);
 
-	*enter = al_enter;
-	*load = al_load;
-	*exit = al_exit;
+	while(1) {
+		void *dst = NULL;
+		s32 len = 0, offset = 0;
 
-#if PATCH_IPL
-	patch_ipl();
-#endif
+		// run apploader main function
+		s32 ret = al_load(&dst, &len, &offset);
+		if (!ret) {
+			gprintf("DONE\n");
+			break;
+		}
+
+		// read data from DVD
+		DVD_LowRead64(dst, len, offset); // (s64)(offset << 2)
+	}
+
+	// set entry point from apploader
+	void (*entry)() = (void (*)())al_exit();
+
+	// run the program
+	entry();
+	__builtin_unreachable();
 }
-
-
-
 
 /*
  * Loads a bitmap mask with all non-void sections in a DOL file.
@@ -296,10 +303,13 @@ static void al_check_default_entry(struct di_default_entry *de)
 static void al_enter(void (*report) (char *text, ...))
 {
 	al_control.step = 1;
+#ifdef DEBUG
+	al_control.report = gprintf;
+#else
 	al_control.report = report;
-	if (report)
-		report("\"El Torito\" apploader\n");
-
+#endif
+	if (al_control.report)
+		al_control.report("\"El Torito\" apploader\n");
 }
 
 /*
@@ -503,9 +513,6 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 		lowmem->a_bi2 = (void *)al_control.bi2_address;
 		flush_dcache_range(lowmem, lowmem+1);
 
-#if PATCH_IPL
-		skip_ipl_animation();
-#endif
 		*length = 0;
 		need_more = 0;
 		al_control.step++;
@@ -526,375 +533,25 @@ static void *al_exit(void)
 	return bl_control.entry_point;
 }
 
-#if PATCH_IPL
+// credit to swiss-gc
+int DVD_LowRead64(void* dst, uint32_t len, uint64_t offset) {
+	volatile uint32_t* dvd = (volatile uint32_t*)0xCC006000;
+	if(offset>>2 > 0xFFFFFFFF)
+		return -1;
 
-/*
- *
- */
-enum ipl_revision {
-	IPL_UNKNOWN,
-	IPL_NTSC_10_001,
-	IPL_NTSC_10_002,
-	IPL_DEV_10,
-	IPL_NTSC_11_001,
-	IPL_PAL_10_001,
-	IPL_PAL_10_002,
-	IPL_MPAL_11,
-	IPL_TDEV_11,
-	IPL_NTSC_12_001,
-	IPL_NTSC_12_101,
-	IPL_PAL_12_101
-};
+	if ((((uint32_t)dst) & 0xC0000000) == 0x80000000) // cached?
+		dvd[0] = 0x2E;
+	dvd[1] = 0;
+	dvd[2] = 0xA8000000;
+	dvd[3] = offset >> 2;
+	dvd[4] = len;
+	dvd[5] = (uint32_t)dst;
+	dvd[6] = len;
+	dvd[7] = 3; // enable reading!
+	while (dvd[7] & 1);
 
-static enum ipl_revision get_ipl_revision(void)
-{
-	register uint32_t sdata2 asm ("r2");
-	register uint32_t sdata asm ("r13");
-
-	if (sdata2 == 0x81465cc0 && sdata == 0x81465320)
-		return IPL_NTSC_10_001;
-	if (sdata2 == 0x81468fc0 && sdata == 0x814685c0)
-		return IPL_NTSC_10_002;
-	if (sdata2 == 0x814695e0 && sdata == 0x81468bc0)
-		return IPL_DEV_10;
-	if (sdata2 == 0x81489c80 && sdata == 0x81489120)
-		return IPL_NTSC_11_001;
-	if (sdata2 == 0x814b5b20 && sdata == 0x814b4fc0)
-		return IPL_PAL_10_001;
-	if (sdata2 == 0x814b4fc0 && sdata == 0x814b4400)
-		return IPL_PAL_10_002;
-	if (sdata2 == 0x81484940 && sdata == 0x81483de0)
-		return IPL_MPAL_11;
-	if (sdata2 == 0x8148fbe0 && sdata == 0x8148ef80)
-		return IPL_TDEV_11;
-	if (sdata2 == 0x8148a660 && sdata == 0x8148b1c0)
-		return IPL_NTSC_12_001;
-	if (sdata2 == 0x8148aae0 && sdata == 0x8148b640)
-		return IPL_NTSC_12_101;
-	if (sdata2 == 0x814b66e0 && sdata == 0x814b7280)
-		return IPL_PAL_12_101;
-
-	return IPL_UNKNOWN;
+	invalidate_dcache_range(dst, dst + len);
+	if (dvd[0] & 0x4)
+		return 1;
+	return 0;
 }
-
-#define PPC_NOP 			0x60000000
-#define PPC_BLR 			0x4e800020
-#define PPC_NULL 			0x00000000
-
-static void patch_ipl_anim(uint32_t address_sound_level, uint32_t address_draw_cubes, uint32_t address_draw_outer, uint32_t address_draw_inner) {
-	uint32_t *address;
-
-	// disable sound (u16 + u8[2] padding)
-	address = (uint32_t *)address_sound_level;
-	*address = PPC_NULL;
-	flush_dcache_range(address, address+1);
-	invalidate_icache_range(address, address+1);
-
-	// disable cubes
-	address = (uint32_t *)address_draw_cubes;
-	*address = PPC_NOP;
-	flush_dcache_range(address, address+1);
-	invalidate_icache_range(address, address+1);
-
-	// disable outer
-	address = (uint32_t *)address_draw_outer;
-	*address = PPC_NOP;
-	flush_dcache_range(address, address+1);
-	invalidate_icache_range(address, address+1);
-
-	// disable inner
-	address = (uint32_t *)address_draw_inner;
-	*address = PPC_NOP;
-	flush_dcache_range(address, address+1);
-	invalidate_icache_range(address, address+1);
-}
-
-/*
- *
- */
-static void patch_ipl(void)
-{
-	uint32_t *start, *end;
-	uint32_t *address;
-
-	uint32_t sound_level;
-	uint32_t draw_cubes;
-	uint32_t draw_outer;
-	uint32_t draw_inner;
-
-	// hide anim and disable sound
-	switch (get_ipl_revision()) {
-	case IPL_NTSC_10_001:
-		sound_level = 0x8145d4d0;
-		draw_cubes = 0x8131055c;
-		draw_outer = 0x8130d224;
-		draw_inner = 0x81310598;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_NTSC_11_001:
-		sound_level = 0x81481278;
-		draw_cubes = 0x81310754;
-		draw_outer = 0x8130d428;
-		draw_inner = 0x81310790;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_NTSC_12_001:
-		sound_level = 0x81483340;
-		draw_cubes = 0x81310aec;
-		draw_outer = 0x8130d79c;
-		draw_inner = 0x81310b28;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_NTSC_12_101:
-		sound_level = 0x814837c0;
-		draw_cubes = 0x81310b04;
-		draw_outer = 0x8130d7b4;
-		draw_inner = 0x81310b40;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_PAL_10_001:
-		sound_level = 0x814ad118;
-		draw_cubes = 0x81310e94;
-		draw_outer = 0x8130d868;
-		draw_inner = 0x81310ed0;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_MPAL_11:
-		sound_level = 0x8147bf38;
-		draw_cubes = 0x81310680;
-		draw_outer = 0x8130d354;
-		draw_inner = 0x813106bc;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_PAL_12_101:
-		sound_level = 0x814af400;
-		draw_cubes = 0x81310fd4;
-		draw_outer = 0x8130d9a8;
-		draw_inner = 0x81311010;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	default:
-		break;
-	}
-
-	// disable region detection
-	switch (get_ipl_revision()) {
-	case IPL_NTSC_10_001:
-		start = (uint32_t *)0x81300a70;
-		end = (uint32_t *)0x813010b0;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x81300e88;
-			if (*address == 0x38000000)
-				*address |= 1;
-
-			address = (uint32_t *)0x81300ea0;
-			if (*address == 0x38000000)
-				*address |= 1;
-
-			address = (uint32_t *)0x81300ea8;
-			if (*address == 0x38000000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_NTSC_10_002:
-		start = (uint32_t *)0x813008d8;
-		end = (uint32_t *)0x8130096c;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x8130092c;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x81300944;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x8130094c;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_DEV_10:
-		start = (uint32_t *)0x81300dfc;
-		end = (uint32_t *)0x81301424;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x8130121c;
-			if (*address == 0x38000000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_NTSC_11_001:
-	case IPL_PAL_10_001:
-	case IPL_MPAL_11:
-		start = (uint32_t *)0x813006e8;
-		end = (uint32_t *)0x813007b8;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x8130077c;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x813007a0;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_PAL_10_002:
-		start = (uint32_t *)0x8130092c;
-		end = (uint32_t *)0x81300a10;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x813009d4;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x813009f8;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_TDEV_11:
-		start = (uint32_t *)0x81300b58;
-		end = (uint32_t *)0x81300c3c;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x81300c00;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x81300c24;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_NTSC_12_001:
-	case IPL_NTSC_12_101:
-		start = (uint32_t *)0x81300a24;
-		end = (uint32_t *)0x81300b08;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x81300acc;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x81300af0;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_PAL_12_101:
-		start = (uint32_t *)0x813007d8;
-		end = (uint32_t *)0x813008bc;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x81300880;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x813008a4;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	default:
-		break;
-	}
-}
-
-/*
- *
- */
-static void skip_ipl_animation(void)
-{
-	switch (get_ipl_revision()) {
-	case IPL_NTSC_10_001:
-		if (*(uint32_t *)0x8145d6d0 == 1
-			&& !(*(uint16_t *)0x8145f14c & 0x0100)
-			&& *(uint32_t *)0x8145d6f0 == 0x81465728)
-			*(uint8_t *)0x81465747 = 1;
-		break;
-	case IPL_NTSC_10_002:
-		if (*(uint32_t *)0x814609c0 == 1
-			&& !(*(uint16_t *)0x814624ec & 0x0100)
-			&& *(uint32_t *)0x814609e0 == 0x81468ac8)
-			*(uint8_t *)0x81468ae7 = 1;
-		break;
-	case IPL_DEV_10:
-		if (*(uint32_t *)0x81460fe0 == 1
-			&& !(*(uint16_t *)0x81462b0c & 0x0100)
-			&& *(uint32_t *)0x81461000 == 0x814690e8)
-			*(uint8_t *)0x81469107 = 1;
-		break;
-	case IPL_NTSC_11_001:
-		if (*(uint32_t *)0x81481518 == 1
-			&& !(*(uint16_t *)0x8148370c & 0x0100)
-			&& *(uint32_t *)0x81481538 == 0x81489e58)
-			*(uint8_t *)0x81489e77 = 1;
-		break;
-	case IPL_PAL_10_001:
-		if (*(uint32_t *)0x814ad3b8 == 1
-			&& !(*(uint16_t *)0x814af60c & 0x0100)
-			&& *(uint32_t *)0x814ad3d8 == 0x814b5d58)
-			*(uint8_t *)0x814b5d77 = 1;
-		break;
-	case IPL_PAL_10_002:
-		if (*(uint32_t *)0x814ac828 == 1
-			&& !(*(uint16_t *)0x814aeb2c & 0x0100)
-			&& *(uint32_t *)0x814ac848 == 0x814b5278)
-			*(uint8_t *)0x814b5297 = 1;
-		break;
-	case IPL_MPAL_11:
-		if (*(uint32_t *)0x8147c1d8 == 1
-			&& !(*(uint16_t *)0x8147e3cc & 0x0100)
-			&& *(uint32_t *)0x8147c1f8 == 0x81484b18)
-			*(uint8_t *)0x81484b37 = 1;
-		break;
-	case IPL_TDEV_11:
-		if (*(uint32_t *)0x81487438 == 1
-			&& !(*(uint16_t *)0x8148972c & 0x0100)
-			&& *(uint32_t *)0x81487458 == 0x8148fe78)
-			*(uint8_t *)0x8148fe97 = 1;
-		break;
-	case IPL_NTSC_12_001:
-		if (*(uint32_t *)0x814835f0 == 1
-			&& !(*(uint16_t *)0x81484cec & 0x0100)
-			&& *(uint32_t *)0x81483610 == 0x8148b438)
-			*(uint8_t *)0x8148b457 = 1;
-		break;
-	case IPL_NTSC_12_101:
-		if (*(uint32_t *)0x81483a70 == 1
-			&& !(*(uint16_t *)0x8148518c & 0x0100)
-			&& *(uint32_t *)0x81483a90 == 0x8148b8d8)
-			*(uint8_t *)0x8148b8f7 = 1;
-		break;
-	case IPL_PAL_12_101:
-		if (*(uint32_t *)0x814af6b0 == 1
-			&& !(*(uint16_t *)0x814b0dcc & 0x0100)
-			&& *(uint32_t *)0x814af6d0 == 0x814b7518)
-			*(uint8_t *)0x814b7537 = 1;
-		break;
-	default:
-		break;
-	}
-}
-
-#endif
-
