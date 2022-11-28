@@ -179,6 +179,12 @@ void al_start(void **enter, void **load, void **exit) {
 			break;
 		}
 
+#ifdef DEBUG
+		if (len % 32 != 0) {
+			gprintf("unaligned read %d\n", len);
+		}
+#endif
+
 		// read data from DVD
 		DVD_LowRead64(dst, len, offset); // (s64)(offset << 2)
 	}
@@ -446,9 +452,12 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 
 		/* check if we are going to be done with all sections */
 		if (bl_control.sects_bitmap == bl_control.all_sects_bitmap) {
+#ifdef DEBUG
+			gprintf("BSS clear %08x len=%x\n", dh->address_bss, dh->size_bss);
+#endif
 			/* setup .bss section */
 			if (dh->size_bss)
-				memset((void *)dh->address_bss, 0,
+				_memset((void *)dh->address_bss, 0,
 				       dh->size_bss);
 
 			/* bye, bye */
@@ -506,7 +515,7 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 		lowmem->a_arena_hi = al_control.fst_address;
 		lowmem->a_fst = (void *)al_control.fst_address;
 		lowmem->a_fst_max_size = al_control.fst_size;
-		//memset(&lowmem->a_debugger_info, 0, sizeof(struct dolphin_debugger_info));
+		//_memset(&lowmem->a_debugger_info, 0, sizeof(struct dolphin_debugger_info));
 		//lowmem->a_debug_monitor_size = 0;
 		lowmem->a_debug_monitor = (void *)0x81800000;
 		lowmem->a_simulated_memory_size = 0x01800000;
