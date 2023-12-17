@@ -163,6 +163,9 @@ static int write_system_area(int fd, struct gcm_system_area *sa)
 	result = write(fd, &sa->dhi, sizeof(sa->dhi));
 	if (result < 0)
 		return result;
+
+	printf("pos after bi2 = %04x\n", lseek(fd, 0, SEEK_CUR));
+
 	/* ... with padding */
 	result = pad_file(fd, 0x2000 - sizeof(sa->dhi));
 	if (result < 0)

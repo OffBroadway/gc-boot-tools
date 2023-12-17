@@ -29,7 +29,7 @@
 #define DEFAULT_GAME_NAME	"Bootable iso9660 Disc"
 #define DEFAULT_COMPANY		"(company name)"
 #define DEFAULT_FULL_GAME_TITLE	"(full game title)"
-#define DEFAULT_GAME_DESCR	"Built with cubeboot-tools,\n" \
+#define DEFAULT_GAME_DESCR	"Built with gc-boot-tools,\n" \
 				"have fun! :)"
 
 

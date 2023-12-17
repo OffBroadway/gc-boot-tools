@@ -1,5 +1,6 @@
 /mkgbi/mkgbi
 /ppm2bnr/ppm2bnr
+/parse_gcm/parse_gcm
 *.bin
 *.elf
 *.o

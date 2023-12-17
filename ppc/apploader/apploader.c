@@ -23,6 +23,7 @@
 #include "../../include/gcm.h"
 #include "../../include/dol.h"
 
+#include "libc.h"
 #include "usbgecko.h"
 
 #define DI_ALIGN_SHIFT	5
@@ -35,41 +36,6 @@
 
 /*
  * DVD data structures
- */
-
-struct di_boot_record {
-	uint8_t zero;
-	uint8_t standard_id[5];	/* "CD001" */
-	uint8_t version;	/* 1 */
-	uint8_t boot_system_id[32];	/* "EL TORITO SPECIFICATION" */
-	uint8_t boot_id[32];
-	uint32_t boot_catalog_offset;	/* in media sectors */
-	uint8_t align_1[21];
-} __attribute__ ((__packed__));
-
-struct di_validation_entry {
-	uint8_t header_id;	/* 1 */
-	uint8_t platform_id;	/* 0=80x86,1=PowerPC,2=Mac */
-	uint16_t reserved;
-	uint8_t id_string[24];
-	uint16_t checksum;
-	uint8_t key_55;		/* 55 */
-	uint8_t key_AA;		/* AA */
-} __attribute__ ((__packed__));
-
-struct di_default_entry {
-	uint8_t boot_indicator;	/* 0x88=bootable */
-	uint8_t boot_media_type;	/* 0=no emulation */
-	uint16_t load_segment;	/* multiply by 10 to get actual address */
-	uint8_t system_type;
-	uint8_t unused_1;
-	uint16_t sector_count;	/* emulated sectors to load at segment */
-	uint32_t load_rba;	/* in media sectors */
-	uint8_t unused_2[20];
-} __attribute__ ((__packed__));
-
-/*
- *
  */
 
 struct dolphin_debugger_info {
@@ -150,51 +116,28 @@ struct bootloader_control {
 };
 
 
-static struct dolphin_lowmem *lowmem =
-			 (struct dolphin_lowmem *)0x80000000;
+static struct dolphin_lowmem *lowmem = (struct dolphin_lowmem *)0x80000000;
 
 static struct apploader_control al_control = { .fst_size = ~0 };
 static struct bootloader_control bl_control = { .size = ~0 };
 
-static unsigned char di_buffer[DI_SECTOR_SIZE] __attribute__ ((aligned(32))) =
-	"www.gc-linux.org";
-
-int DVD_LowRead64(void* dst, uint32_t len, uint64_t offset);
+static unsigned char di_buffer[DI_SECTOR_SIZE] __attribute__ ((aligned(32))) = "sillyplaceholder";
 
 /*
  * This is our particular "main".
  * It _must_ be the first function in this file.
  */
-void al_start(void **enter, void **load, void **exit) {
-	al_enter(NULL);
+void al_start(void **enter, void **load, void **exit)
+{
+	al_control.step = 0;
 
-	while(1) {
-		void *dst = NULL;
-		s32 len = 0, offset = 0;
+	*enter = al_enter;
+	*load = al_load;
+	*exit = al_exit;
 
-		// run apploader main function
-		s32 ret = al_load(&dst, &len, &offset);
-		if (!ret) {
-			gprintf("DONE\n");
-			break;
-		}
-
-#ifdef DEBUG
-		if (len % 32 != 0) {
-			gprintf("unaligned read %d\n", len);
-		}
+#if PATCH_IPL
+	patch_ipl();
 #endif
-
-		// read data from DVD
-		DVD_LowRead64(dst, len, offset); // (s64)(offset << 2)
-	}
-
-	// set entry point from apploader
-	void (*entry)() = (void (*)())al_exit();
-
-	// run the program
-	entry();
-	__builtin_unreachable();
 }
 
 /*
@@ -283,26 +226,6 @@ static void al_check_dol(struct dol_header *h, int dol_length)
 }
 
 /*
- * Checks if the validation entry of the boot catalog is valid.
- */
-static void al_check_validation_entry(struct di_validation_entry *ve)
-{
-	if (ve->header_id != 1 || ve->key_55 != 0x55 || ve->key_AA != 0xAA) {
-		panic("Invalid validation entry\n");
-	}
-}
-
-/*
- * Checks if the default entry in the boot catalog is valid.
- */
-static void al_check_default_entry(struct di_default_entry *de)
-{
-	if (de->boot_indicator != 0x88) {
-		panic("Default entry not bootable\n");
-	}
-}
-
-/*
  * Initializes the apploader related stuff.
  * Called by the IPL.
  */
@@ -310,12 +233,12 @@ static void al_enter(void (*report) (char *text, ...))
 {
 	al_control.step = 1;
 #ifdef DEBUG
-	al_control.report = gprintf;
+	al_control.report = (void (*)(const char *, ...))gprintf;
 #else
 	al_control.report = report;
 #endif
 	if (al_control.report)
-		al_control.report("\"El Torito\" apploader\n");
+		al_control.report("New apploader\n");
 }
 
 /*
@@ -324,10 +247,6 @@ static void al_enter(void (*report) (char *text, ...))
  */
 static int al_load(void **address, uint32_t *length, uint32_t *offset)
 {
-	struct di_boot_record *br;
-	struct di_validation_entry *validation_entry;
-	struct di_default_entry *default_entry;
-
 	struct gcm_disk_header *disk_header;
 	struct gcm_disk_header_info *disk_header_info;
 
@@ -346,49 +265,59 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 	case 1:
 		al_control.step = 1; /* fix it to a known value */
 
-		/* read sector 17, containing Boot Record Volume */
+		/* read sector 0, containing disk header and disk header info */
 		*address = di_buffer;
-		*length = (uint32_t) di_align(sizeof(*br));
-		*offset = 17 * DI_SECTOR_SIZE;
+		*length = (uint32_t) di_align(sizeof(*disk_header) + sizeof(*disk_header_info));
+		*offset = 0;
 		invalidate_dcache_range(*address, *address + *length);
 
 		al_control.step++;
 		break;
 	case 2:
-		/* boot record volume loaded */
-		br = (struct di_boot_record *)di_buffer;
+		/* boot.bin and bi2.bin header loaded */
 
-		/* check "EL TORITO SPECIFICATION" id */
-		if (memcmp(br->boot_system_id, "EL TORITO SPECIFICATION", 23)) {
-			panic("Can't find EL TORITO boot record\n");
-		}
+		disk_header = (struct gcm_disk_header *)di_buffer;
+		disk_header_info = (struct gcm_disk_header_info *)(di_buffer + sizeof(*disk_header));
 
-		le32_to_cpus(&br->boot_catalog_offset);
+		bl_control.offset = disk_header->layout.dol_offset;
+		al_control.report("Found dol, %08x\n", bl_control.offset);
 
-		/* read the boot catalog */
-		*address = di_buffer;
-		*length = DI_SECTOR_SIZE;
-		*offset = br->boot_catalog_offset * DI_SECTOR_SIZE;
+		al_control.fst_offset = disk_header->layout.fst_offset;
+		al_control.fst_size = disk_header->layout.fst_size;
+		al_control.fst_address = (0x81800000 - al_control.fst_size) & DI_ALIGN_MASK;
+
+		al_control.report("fst_offset = %08x\n", al_control.fst_offset);
+		al_control.report("fst_size = %08x\n", al_control.fst_size);
+		al_control.report("fst_address = %08x\n", al_control.fst_address);
+
+		/* read fst.bin */
+		*address = (void *)al_control.fst_address;
+		*length = (uint32_t) di_align(al_control.fst_size);
+		*offset = al_control.fst_offset;
 		invalidate_dcache_range(*address, *address + *length);
 
 		al_control.step++;
 		break;
 	case 3:
-		/* boot catalog loaded */
+		/* fst.bin loaded */
+		u32* fst_bin = (u32*)al_control.fst_address;
 
-		/* check validation entry */
-		validation_entry = (struct di_validation_entry *)di_buffer;
-		al_check_validation_entry(validation_entry);
+		al_control.report("FST dump %08x, %08x, %08x, %08x\n", fst_bin[0], fst_bin[1], fst_bin[2], fst_bin[3]);
 
-		/* check default bootable entry */
-		default_entry = (struct di_default_entry *)(di_buffer + 0x20);
-		al_check_default_entry(default_entry);
+		al_control.bi2_address = al_control.fst_address - 0x2000;
 
-		le16_to_cpus(&default_entry->sector_count);
-		le32_to_cpus(&default_entry->load_rba);
+		/* read bi2.bin */
+		*address = (void *)al_control.bi2_address;
+		*length = 0x2000;
+		*offset = 0x440;
+		invalidate_dcache_range(*address, *address + *length);
 
-		bl_control.size = default_entry->sector_count * 512;
-		bl_control.offset = default_entry->load_rba * DI_SECTOR_SIZE;
+		al_control.step++;
+		break;
+	case 4:
+		/* bi2.bin loaded */
+
+		al_control.report("Found dol, %08x\n", bl_control.offset);
 
 		/* request the .dol header */
 		*address = di_buffer;
@@ -397,9 +326,10 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 		invalidate_dcache_range(*address, *address + *length);
 
 		bl_control.sects_bitmap = 0xdeadbeef;
+
 		al_control.step++;
 		break;
-	case 4:
+	case 5:
 		/* .dol header loaded */
 
 		dh = (struct dol_header *)di_buffer;
@@ -454,6 +384,8 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 		if (bl_control.sects_bitmap == bl_control.all_sects_bitmap) {
 #ifdef DEBUG
 			gprintf("BSS clear %08x len=%x\n", dh->address_bss, dh->size_bss);
+#else
+			al_control.report("BSS clear %08x len=%x\n", dh->address_bss, dh->size_bss);
 #endif
 			/* setup .bss section */
 			if (dh->size_bss)
@@ -464,50 +396,15 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 			al_control.step++;
 		}
 		break;
-	case 5:
-		/* all .dol sections loaded */
 
-		/* read sector 0, containing disk header and disk header info */
-		*address = di_buffer;
-		*length = (uint32_t) di_align(sizeof(*disk_header) + sizeof(*disk_header_info));
-		*offset = 0;
-		invalidate_dcache_range(*address, *address + *length);
-
-		al_control.step++;
-		break;
 	case 6:
-		/* boot.bin and bi2.bin header loaded */
 
-		disk_header = (struct gcm_disk_header *)di_buffer;
-		disk_header_info = (struct gcm_disk_header_info *)(di_buffer + sizeof(*disk_header));
+		al_control.report("all .dol sections loaded\n");
+		al_control.step = 8;
 
-		al_control.fst_offset = disk_header->layout.fst_offset;
-		al_control.fst_size = disk_header->layout.fst_size;
-		al_control.fst_address = (0x81800000 - al_control.fst_size) & DI_ALIGN_MASK;
-
-		/* read fst.bin */
-		*address = (void *)al_control.fst_address;
-		*length = (uint32_t) di_align(al_control.fst_size);
-		*offset = al_control.fst_offset;
-		invalidate_dcache_range(*address, *address + *length);
-
-		al_control.step++;
-		break;
-	case 7:
-		/* fst.bin loaded */
-
-		al_control.bi2_address = al_control.fst_address - 0x2000;
-
-		/* read bi2.bin */
-		*address = (void *)al_control.bi2_address;
-		*length = 0x2000;
-		*offset = 0x440;
-		invalidate_dcache_range(*address, *address + *length);
-
-		al_control.step++;
 		break;
 	case 8:
-		/* bi2.bin loaded */
+		/* all .dol sections loaded */
 
 		lowmem->a_boot_magic = 0x0d15ea5e;
 		lowmem->a_version = 1;
@@ -525,6 +422,7 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 		*length = 0;
 		need_more = 0;
 		al_control.step++;
+
 		break;
 	default:
 		al_control.step++;
@@ -540,27 +438,4 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 static void *al_exit(void)
 {
 	return bl_control.entry_point;
-}
-
-// credit to swiss-gc
-int DVD_LowRead64(void* dst, uint32_t len, uint64_t offset) {
-	volatile uint32_t* dvd = (volatile uint32_t*)0xCC006000;
-	if(offset>>2 > 0xFFFFFFFF)
-		return -1;
-
-	if ((((uint32_t)dst) & 0xC0000000) == 0x80000000) // cached?
-		dvd[0] = 0x2E;
-	dvd[1] = 0;
-	dvd[2] = 0xA8000000;
-	dvd[3] = offset >> 2;
-	dvd[4] = len;
-	dvd[5] = (uint32_t)dst;
-	dvd[6] = len;
-	dvd[7] = 3; // enable reading!
-	while (dvd[7] & 1);
-
-	invalidate_dcache_range(dst, dst + len);
-	if (dvd[0] & 0x4)
-		return 1;
-	return 0;
 }

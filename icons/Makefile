@@ -1,6 +1,6 @@
 
 opening.bnr: opening.ppm
-	../ppm2bnr/ppm2bnr -n "iso9660 bootable disc" -c "www.gc-linux.org" -N "GNU/Linux on the Nintendo GameCube" -C "www.gc-linux.org" $< -o $@
+	../ppm2bnr/ppm2bnr -n "compat bootable disc" -c "OffBoardway" -N "Compat Bootloader Nintendo GameCube" -C "OffBroadway" $< -o $@
 
 
 clean:

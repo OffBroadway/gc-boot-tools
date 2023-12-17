@@ -57,8 +57,7 @@ void rumble_on(void)
 
 void panic(char *text)
 {
-	gprintf(text);
+	// gprintf(text);
 	rumble(1);
 	for (;;) ;
 }
-
