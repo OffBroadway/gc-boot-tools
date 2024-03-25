@@ -50,7 +50,7 @@ static void default_disk_header(struct gcm_disk_header *dh)
 	memcpy(dh->info.maker_code, "GL", 2);	/* gc-linux */
 	dh->info.magic = cpu_to_be32(0xc2339f3d);
 
-	strcpy(dh->game_name, "GAMECUBE \"EL TORITO\" BOOTLOADER");
+	strcpy(dh->game_name, "GAMECUBE COMPAT BOOTLOADER");
 
 //      dh->debug_monitor_offset = cpu_to_be32(0x0001a7f4);
 //      dh->debug_monitor_address = cpu_to_be32(0x80280060);
