@@ -74,6 +74,7 @@ s32 WriteUARTN(const void *buf, u32 len);
 void gprintf(const char *fmt, ...);
 #else
 #define gprintf(...)
+// #error "bad time"
 #endif
 
 #endif /* EXI_H */

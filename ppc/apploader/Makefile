@@ -8,12 +8,12 @@ HOSTCC = gcc
 
 DOLTOOL = doltool
 
-CFLAGS := -O2
+CFLAGS := -O2 -ggdb
 
 apploader_entry_point = 81200000
 
 
-apploader_C_SRCS = apploader.c libc.c tinyprintf.c usbgecko.c
+apploader_C_SRCS = apploader.c libc.c usbgecko.c
 apploader_C_OBJS = $(patsubst %.c, %.o, $(apploader_C_SRCS))
 
 apploader_SRCS = $(apploader_C_SRCS)

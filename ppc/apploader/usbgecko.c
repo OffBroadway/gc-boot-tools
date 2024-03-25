@@ -18,147 +18,66 @@
  */
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdarg.h>
 
-#include "tinyprintf.h"
+// #include "tinyprintf.h"
 #include "usbgecko.h"
 
+#include "config.h"
+
 #ifdef DEBUG
-extern volatile u32 EXI[3][5];
 
-static void exi_select(void)
+// u32 *uart_init = (u32*)0x81481c70;
+// u32 (*InitializeUART)(u32) = (u32 (*)(u32))0x81360920;
+
+u32 *orig_uart_enabled = (u32*)0x81481a40;
+s32 (*orig_WriteUARTN)(const void *buf, u32 len) = (s32 (*)(const void *, u32))0x81360970;
+
+s32 custom_WriteUARTN(const void *buf, u32 len)
 {
-	EXI[EXI_CHANNEL_1][0] = (EXI[EXI_CHANNEL_1][0] & 0x405) | ((1 << EXI_DEVICE_0) << 7) | (EXI_SPEED_32MHZ << 4);
+  *orig_uart_enabled = 0xa5ff005a;
+	return orig_WriteUARTN(buf, len);
 }
 
-static void exi_deselect(void)
-{
-	EXI[EXI_CHANNEL_1][0] &= 0x405;
-}
+typedef void* (*WriteProc_t)(void*, const char*, size_t);
 
-static uint32_t exi_imm_read_write(uint32_t data, uint32_t len)
-{
-	EXI[EXI_CHANNEL_1][4] = data;
-	EXI[EXI_CHANNEL_1][3] = ((len - 1) << 4) | (EXI_READ_WRITE << 2) | 0b01;
-	while (EXI[EXI_CHANNEL_1][3] & 0b01);
-	return EXI[EXI_CHANNEL_1][4] >> ((4 - len) * 8);
-}
+int (*__pformatter)(WriteProc_t WriteProc, void* WriteProcArg, const char* format_str, va_list arg) = (void*)0x81378cf8;
+WriteProc_t __StringWrite = (void*)0x81378c34;
 
-static bool usb_probe(void)
-{
-	uint16_t val;
+typedef struct {
+	char* CharStr;
+	size_t MaxCharCount;
+	size_t CharsWritten;
+} __OutStrCtrl;
 
-	exi_select();
-	val = exi_imm_read_write(0x9 << 28, 2);
-	exi_deselect();
+// from https://github.com/projectPiki/pikmin2/blob/0285984b81a1c837063ae1852d94607fdb21d64c/src/Dolphin/MSL_C/MSL_Common/printf.c#L1267-L1282
+int vsnprintf(char* s, size_t n, const char* format, va_list arg) {
+	int end;
+	__OutStrCtrl osc;
+	osc.CharStr      = s;
+	osc.MaxCharCount = n;
+	osc.CharsWritten = 0;
 
-	return val == 0x470;
-}
+	end = __pformatter(__StringWrite, &osc, format, arg);
 
-static bool usb_receive_byte(uint8_t *data)
-{
-	uint16_t val;
-
-	exi_select();
-	val = exi_imm_read_write(0xA << 28, 2); *data = val;
-	exi_deselect();
-
-	return !(val & 0x800);
-}
-
-static bool usb_transmit_byte(const uint8_t *data)
-{
-	uint16_t val;
-
-	exi_select();
-	val = exi_imm_read_write(0xB << 28 | *data << 20, 2);
-	exi_deselect();
-
-	return !(val & 0x400);
-}
-
-static bool usb_transmit_check(void)
-{
-	uint8_t val;
-
-	exi_select();
-	val = exi_imm_read_write(0xC << 28, 1);
-	exi_deselect();
-
-	return !(val & 0x4);
-}
-
-static bool usb_receive_check(void)
-{
-	uint8_t val;
-
-	exi_select();
-	val = exi_imm_read_write(0xD << 28, 1);
-	exi_deselect();
-
-	return !(val & 0x4);
-}
-
-static int usb_transmit(const void *data, int size, int minsize)
-{
-	int i = 0, j = 0, check = 1;
-
-	while (i < size) {
-		if ((check && usb_transmit_check()) ||
-			(check = usb_transmit_byte(data + i))) {
-			j = i % 128;
-			if (i < minsize)
-				continue;
-			else break;
-		}
-
-		i++;
-		check = i % 128 == j;
+	if (s) {
+		s[(end < n) ? end : n - 1] = '\0';
 	}
 
-	return i;
-}
-
-static int usb_receive(void *data, int size, int minsize)
-{
-	int i = 0, j = 0, check = 1;
-
-	while (i < size) {
-		if ((check && usb_receive_check()) ||
-			(check = usb_receive_byte(data + i))) {
-			j = i % 64;
-			if (i < minsize)
-				continue;
-			else break;
-		}
-
-		i++;
-		check = i % 64 == j;
-	}
-
-	return i;
-}
-
-s32 WriteUARTN(const void *buf, u32 len)
-{
-	if (usb_probe()) {
-		usb_transmit(buf, len, len);
-		return 0;
-	}
-
-	return -1;
+	return end;
 }
 
 void gprintf(const char *fmt, ...) {
-	va_list args;
-    static char buf[256];
+  va_list args;
+  static char buf[256];
 
-    va_start(args, fmt);
-    int length = vsprintf((char *)buf, (char *)fmt, args);
+  va_start(args, fmt);
+  int length = vsnprintf((char *)buf, 256, (char *)fmt, args);
 
-	WriteUARTN(buf, length);
+  custom_WriteUARTN(buf, length);
 
-    va_end(args);
+  va_end(args);
 }
 #endif
