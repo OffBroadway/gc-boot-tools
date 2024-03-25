@@ -231,10 +231,10 @@ int main(int argc, char *argv[])
     // printf("fst offset = %x (%x) sized %s\n", (uint32_t)&header.fst_bin - header_offset, (uint32_t)&header.fst_bin - header_offset == 0x00006440, sizeof(struct gcm_minimal_fst) == 0x0040 ? "GOOD" : "BAD");
     // printf("bnr offset = %x (%x) total %x\n", (uint32_t)&header.bnr_bin - header_offset, (uint32_t)&header.bnr_bin - header_offset == 0x00006480, sizeof(struct gcm_minimal_header));
 
-    // write_struct("boot.bin", &header.dh, sizeof(struct gcm_disk_header));
-    // write_struct("bi2.bin", &header.dhi_w.dhi, sizeof(struct gcm_disk_header_info));
-    // write_struct("al_header.bin", &header.al_header, sizeof(struct gcm_apploader_header));
-    // write_struct("fst.bin", &header.fst_bin, sizeof(struct gcm_minimal_fst));
+    write_struct("boot.bin", &header.dh, sizeof(struct gcm_disk_header));
+    write_struct("bi2.bin", &header.dhi_w.dhi, sizeof(struct gcm_disk_header_info));
+    write_struct("al_header.bin", &header.al_header, sizeof(struct gcm_apploader_header));
+    write_struct("fst.bin", &header.fst_bin, sizeof(struct gcm_minimal_fst));
     write_struct("disc_header.iso", &header, sizeof(struct gcm_minimal_header));
 
     return 0;
