@@ -132,7 +132,7 @@ static void default_minimal_fst(struct gcm_minimal_fst *fst_bin)
     fst_bin->opening.file.file_offset = cpu_to_be32(0x00006480);
 
     // string table
-    strcpy(fst_bin->string_table, "openning.bnr");
+    strcpy(fst_bin->string_table, "opening.bnr");
 }
 
 uint8_t *read_file_into_buffer(const char *filename, size_t *size)

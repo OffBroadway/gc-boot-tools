@@ -275,7 +275,7 @@ void usage(void)
 		"  -a, --apploader=FILE    use apploader from file"
 		"      (default `apploader.bin')" "\n"
 		"  -b, --banner=FILE       use banner from file" "\n"
-		"      (default `openning.bnr')" "\n"
+		"      (default `opening.bnr')" "\n"
 		"  -o, --outfile=PATH      output file (default stdout)" "\n",
 		__progname);
 	exit(1);
