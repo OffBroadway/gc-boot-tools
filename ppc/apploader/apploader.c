@@ -15,7 +15,7 @@
  *
  */
 
-#define PATCH_IPL 1
+// #define PATCH_IPL 1
 
 #include <stddef.h>
 #include <string.h>
@@ -27,6 +27,16 @@
 
 #include "libc.h"
 #include "usbgecko.h"
+
+#ifndef ATTRIBUTE_ALIGN
+# define ATTRIBUTE_ALIGN(v)				__attribute__((aligned(v)))
+#endif
+#ifndef ATTRIBUTE_PACKED
+# define ATTRIBUTE_PACKED				__attribute__((packed))
+#endif
+
+typedef uint16_t u16;				///< 16bit unsigned integer
+typedef volatile u16 vu16;			///< 16bit unsigned volatile integer
 
 #define DI_ALIGN_SHIFT	5
 #define DI_ALIGN_SIZE	(1UL << DI_ALIGN_SHIFT)
@@ -93,7 +103,7 @@ struct dolphin_lowmem {
  *
  */
 
-static void al_enter(void (*report) (char *text, ...));
+static void al_enter(void (*report) (const char *text, ...));
 static int al_load(void **address, uint32_t * length, uint32_t * offset);
 static void *al_exit(void);
 
@@ -106,7 +116,7 @@ struct apploader_control {
 	uint32_t	fst_offset;
 	uint32_t	fst_size;
 	unsigned long	bi2_address;
-	void		(*report) (char *text, ...);
+	void		(*report) (const char *text, ...);
 };
 
 struct bootloader_control {
@@ -130,7 +140,45 @@ static void patch_ipl(void);
 static void skip_ipl_animation(void);
 #endif
 
-void done_func();
+static u32 *signal_word = (void*)0x81700000;
+
+extern void save_ipl(void);
+extern void done_func(void);
+extern void run_code(void);
+extern void run(register void* entry_point);
+extern void run_interrupt(register void *entry_point);
+
+#define NEW_PPC_INSTR() 0
+
+#define PPC_OPCODE_B           18
+
+// fields
+#define PPC_OPCODE_MASK  0x3F
+#define PPC_OPCODE_SHIFT 26
+#define PPC_GET_OPCODE(instr)       ((instr           >> PPC_OPCODE_SHIFT) & PPC_OPCODE_MASK)
+#define PPC_SET_OPCODE(instr,opcode) (instr |= (opcode & PPC_OPCODE_MASK) << PPC_OPCODE_SHIFT)
+
+#define PPC_LI_MASK      0xFFFFFF
+#define PPC_LI_SHIFT     2
+#define PPC_GET_LI(instr)           ((instr       >> PPC_LI_SHIFT) & PPC_LI_MASK)
+#define PPC_SET_LI(instr,li)         (instr |= (li & PPC_LI_MASK) << PPC_LI_SHIFT)
+
+#define PPC_AA_MASK      0x1
+#define PPC_AA_SHIFT     1
+#define PPC_GET_AA(instr)           ((instr       >> PPC_AA_SHIFT) & PPC_AA_MASK)
+#define PPC_SET_AA(instr,aa)         (instr |= (aa & PPC_AA_MASK) << PPC_AA_SHIFT)
+
+#define PPC_LK_MASK      0x1
+#define PPC_LK_SHIFT     0
+#define PPC_GET_LK(instr)           ((instr       >> PPC_LK_SHIFT) & PPC_LK_MASK)
+#define PPC_SET_LK(instr,lk)         (instr |= (lk & PPC_LK_MASK) << PPC_LK_SHIFT)
+
+#define GEN_B(ppc,dst,aa,lk) \
+	{ ppc = NEW_PPC_INSTR(); \
+	  PPC_SET_OPCODE(ppc, PPC_OPCODE_B); \
+	  PPC_SET_LI    (ppc, (dst)); \
+	  PPC_SET_AA    (ppc, (aa)); \
+	  PPC_SET_LK    (ppc, (lk)); }
 
 /*
  * This is our particular "main".
@@ -139,6 +187,44 @@ void done_func();
 void al_start(void **enter, void **load, void **exit)
 {
 	al_control.step = 0;
+	gprintf("al_start\n");
+	if (*signal_word != 0xfeedface) {
+		gprintf("INCEPTION\n");
+		*signal_word = 0xfeedface;
+		{
+			// allow any region
+			uint32_t *address = (uint32_t *)0x81300d50;
+			*address = 0x38600001; // li r3, 1
+			flush_dcache_range(address, address+1);
+			invalidate_icache_range(address, address+1);
+		}
+		{
+			// force tick main thread
+			uint32_t *address = (uint32_t *)0x81300654;
+			*address = 0x60000000; // nop
+			flush_dcache_range(address, address+1);
+			invalidate_icache_range(address, address+1);
+		}
+
+		save_ipl();
+
+		// *(u32*)0x8130bb6c = 0x38000000; // li r0, 2 (force menu)
+		// {
+		// 	u32 *target = (void*)0x8130bba8;
+		// 	GEN_B(*target, ((u32*)done_func - target), 0, 1);
+		// }
+		// {
+		// 	u32 *target = (void*)0x813010f0;
+		// 	GEN_B(*target, ((u32*)run_code - target), 0, 1);
+		// 	// TODO cache
+		// }
+
+		run_interrupt((void*)run_code);
+
+		// void (*start_prog)() = (void*)0x813021b4;
+		// start_prog();
+		// __builtin_unreachable();
+	}
 
 	*enter = al_enter;
 	*load = al_load;
@@ -147,17 +233,145 @@ void al_start(void **enter, void **load, void **exit)
 #ifdef DEBUG
 	gprintf("Early code exec\n");
 	// while(1);
-
-	u32 target = 0x81300cf4; // NTSC11 only
-	u32 distance = (u32)&gprintf - target;
-	*(u32*)target = 0x48000000 | 0x1 | (distance & 0x03fffffc);
-	// *(u32*)0x81300cf4 = 0x7fe00008;
 #endif
 
 #if PATCH_IPL
 
 	patch_ipl();
 #endif
+}
+
+// void _memset(void* s, int c, int count) {
+// 	char* xs = (char*)s;
+// 	while (count--)
+// 		*xs++ = c;
+// }
+
+void run_code() {
+	// {
+	// 	// skip threaded sleep
+	// 	uint32_t *address = (uint32_t *)0x81372e64;
+	// 	*address = 0x60000000; // nop
+	// 	flush_dcache_range(address, address+1);
+	// 	invalidate_icache_range(address, address+1);
+	// }
+	
+	// void (*GXDrawDone)() = (void*)0x81372e10;
+	void (*GXFlush)() = (void*)0x81372ce8;
+	void (*GXAbortFrame)() = (void*)0x81372d44;
+
+	*(u32*)0x8137ec6c = 0x6b80;
+	*(u32*)0x8137ec70 = 0xb580;
+	*(u32*)0x8137ec74 = 0xffe0;
+	*(u32*)0x8137ecc0 = 0x18760;
+	*(u32*)0x8137ecc4 = 0x1c900;
+	*(u32*)0x8137ed1c = 0x230e0;
+	*(u32*)0x8137ed20 = 0x23220;
+	*(u32*)0x8137ed24 = 0x2e080;
+	*(u32*)0x8137ed34 = 0x35e40;
+	*(u32*)0x8137ed38 = 0x37f00;
+	*(u32*)0x8137ed3c = 0x3cc00;
+	*(u32*)0x8137ed40 = 0x411c0;
+	*(u32*)0x8137ed44 = 0x45080;
+	*(u32*)0x8137ed48 = 0x45a60;
+
+	// _memset((void*)0x80001800, 0, 0x1800);
+	// _memset((void*)0x80003000, 0, 0x100);
+	// *(u32*)0x800030d8 = 0x006f66c5;
+	// *(u32*)0x800030dc = 0xe76aa800;
+
+	// _memset((void*)0x80700020, 0, 0xa00000);
+	// _memset((void*)0x8159d280, 0, 0x162d80);
+
+	GXFlush();
+	GXAbortFrame();
+	run((void*)0x81300000);
+
+	// void (*start_program)() = (void*)0x8130213c;
+	// while(1) {
+	// 	start_program();
+	// }
+}
+
+
+// DSPCR bits
+#define DSPCR_DSPRESET      0x0800        // Reset DSP
+#define DSPCR_DSPDMA        0x0200        // ARAM dma in progress, if set
+#define DSPCR_DSPINTMSK     0x0100        // * interrupt mask   (RW)
+#define DSPCR_DSPINT        0x0080        // * interrupt active (RWC)
+#define DSPCR_ARINTMSK      0x0040
+#define DSPCR_ARINT         0x0020
+#define DSPCR_AIINTMSK      0x0010
+#define DSPCR_AIINT         0x0008
+#define DSPCR_HALT          0x0004        // halt DSP
+#define DSPCR_PIINT         0x0002        // assert DSP PI interrupt
+#define DSPCR_RES           0x0001        // reset DSP
+
+#define _SHIFTL(v, s, w)	\
+    ((u32) (((u32)(v) & ((0x01 << (w)) - 1)) << (s)))
+#define _SHIFTR(v, s, w)	\
+    ((u32)(((u32)(v) >> (s)) & ((0x01 << (w)) - 1)))
+
+static vu16* const _dspReg = (u16*)0xCC005000;
+
+static __inline__ void __ARClearInterrupt()
+{
+	u16 cause;
+
+	cause = _dspReg[5]&~(DSPCR_DSPINT|DSPCR_AIINT);
+	_dspReg[5] = (cause|DSPCR_ARINT);
+}
+
+static __inline__ void __ARWaitDma()
+{
+	while(_dspReg[5]&DSPCR_DSPDMA);
+}
+
+static void __ARWriteDMA(u32 memaddr,u32 aramaddr,u32 len)
+{
+	// set main memory address
+	_dspReg[16] = (_dspReg[16]&~0x03ff)|_SHIFTR(memaddr,16,16);
+	_dspReg[17] = (_dspReg[17]&~0xffe0)|_SHIFTR(memaddr, 0,16);
+
+	// set aram address
+	_dspReg[18] = (_dspReg[18]&~0x03ff)|_SHIFTR(aramaddr,16,16);
+	_dspReg[19] = (_dspReg[19]&~0xffe0)|_SHIFTR(aramaddr, 0,16);
+
+	// set cntrl bits
+	_dspReg[20] = (_dspReg[20]&~0x8000);
+	_dspReg[20] = (_dspReg[20]&~0x03ff)|_SHIFTR(len,16,16);
+	_dspReg[21] = (_dspReg[21]&~0xffe0)|_SHIFTR(len, 0,16);
+
+	__ARWaitDma();
+	__ARClearInterrupt();
+}
+
+void save_ipl() {
+	const u32 aram_offset = 10 * 1024 * 1024;
+	const u32 ipl_size = 2 * 1024 * 1024;
+	__ARWriteDMA(0x81300000, aram_offset, ipl_size);
+}
+
+void run(register void* entry_point) {
+    asm("mfhid0	4");
+    asm("ori 4, 4, 0x0800");
+    asm("mthid0	4");
+    // hwsync
+    asm("sync");
+    asm("isync");
+    // boot
+    asm("mtlr %0" : : "r" (entry_point));
+    asm("blr");
+}
+
+
+void run_interrupt(register void *entry_point) {
+    asm("mtsrr0 %0" : : "r" (entry_point));
+
+    asm("li 4, 0x30");
+	asm("mtsrr1 4");
+
+    asm("rfi");
 }
 
 /*
@@ -249,7 +463,7 @@ static void al_check_dol(struct dol_header *h, int dol_length)
  * Initializes the apploader related stuff.
  * Called by the IPL.
  */
-static void al_enter(void (*report) (char *text, ...))
+static void al_enter(void (*report) (const char *text, ...))
 {
 	al_control.step = 1;
 #ifdef DEBUG
@@ -278,6 +492,14 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 
 	if (al_control.report)
 		al_control.report("step %d\n", al_control.step);
+
+	// while(1);
+
+	// u32 caller0 = (u32)__builtin_return_address(0);
+	// u32 caller1 = (u32)__builtin_return_address(1);
+	// u32 caller2 = (u32)__builtin_return_address(2);
+	// u32 caller3 = (u32)__builtin_return_address(3);
+	// al_control.report("Callers = [%08x] [%08x] [%08x] [%08x]\n", caller0, caller1, caller2, caller3);
 
 	switch (al_control.step) {
 	case 0:
@@ -349,6 +571,7 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 		bl_control.sects_bitmap = 0xdeadbeef;
 
 		al_control.step++;
+		while(1);
 		break;
 	case 5:
 		/* .dol header loaded */
