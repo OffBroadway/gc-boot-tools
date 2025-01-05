@@ -521,14 +521,20 @@ static enum ipl_revision get_ipl_revision(void)
 #define PPC_NOP 			0x60000000
 #define PPC_BLR 			0x4e800020
 #define PPC_NULL 			0x00000000
-#define ANIM_TYPE_NORMAL	0x00000003
+#define PPC_LI_R3_0x3		0x38600003
 
-static void patch_ipl_anim(uint32_t address_anim_type, uint32_t address_sound_level, uint32_t address_draw_cubes, uint32_t address_draw_outer, uint32_t address_draw_inner) {
+static void patch_ipl_anim(uint32_t address_sram_anim, uint32_t address_rtc_anim, uint32_t address_sound_level, uint32_t address_draw_cubes, uint32_t address_draw_outer, uint32_t address_draw_inner) {
 	uint32_t *address;
 
 	// force normal animation
-	address = (uint32_t *)address_anim_type;
-	*address = ANIM_TYPE_NORMAL;
+	address = (uint32_t *)address_sram_anim;
+	*address = PPC_LI_R3_0x3;
+	flush_dcache_range(address, address+1);
+	invalidate_icache_range(address, address+1);
+
+	// force normal animation
+	address = (uint32_t *)address_rtc_anim;
+	*address = PPC_LI_R3_0x3;
 	flush_dcache_range(address, address+1);
 	invalidate_icache_range(address, address+1);
 
@@ -565,7 +571,8 @@ static void patch_ipl(void)
 	uint32_t *start, *end;
 	uint32_t *address;
 
-	uint32_t anim_type;
+	uint32_t draw_sram_anim;
+	uint32_t draw_rtc_anim;
 	uint32_t sound_level;
 	uint32_t draw_cubes;
 	uint32_t draw_outer;
@@ -574,60 +581,67 @@ static void patch_ipl(void)
 	// hide anim and disable sound
 	switch (get_ipl_revision()) {
 	case IPL_NTSC_10_001:
-		anim_type = 0x8145d6d0;
+		draw_sram_anim = 0x8130b9a8;
+		draw_rtc_anim = 0x8130b998;
 		sound_level = 0x8145d4d0;
 		draw_cubes = 0x8131055c;
 		draw_outer = 0x8130d224;
 		draw_inner = 0x81310598;
-		patch_ipl_anim(anim_type, sound_level, draw_cubes, draw_outer, draw_inner);
+		patch_ipl_anim(draw_sram_anim, draw_rtc_anim, sound_level, draw_cubes, draw_outer, draw_inner);
 		break;
 	case IPL_NTSC_11_001:
-		anim_type = 0x81481518;
+		draw_sram_anim = 0x8130bba8;
+		draw_rtc_anim = 0x8130bb98;
 		sound_level = 0x81481278;
 		draw_cubes = 0x81310754;
 		draw_outer = 0x8130d428;
 		draw_inner = 0x81310790;
-		patch_ipl_anim(anim_type, sound_level, draw_cubes, draw_outer, draw_inner);
+		patch_ipl_anim(draw_sram_anim, draw_rtc_anim, sound_level, draw_cubes, draw_outer, draw_inner);
 		break;
 	case IPL_NTSC_12_001:
-		anim_type = 0x814835f0;
+		draw_sram_anim = 0x8130bf1c;
+		draw_rtc_anim = 0x8130bf0c;
 		sound_level = 0x81483340;
 		draw_cubes = 0x81310aec;
 		draw_outer = 0x8130d79c;
 		draw_inner = 0x81310b28;
-		patch_ipl_anim(anim_type, sound_level, draw_cubes, draw_outer, draw_inner);
+		patch_ipl_anim(draw_sram_anim, draw_rtc_anim, sound_level, draw_cubes, draw_outer, draw_inner);
 		break;
 	case IPL_NTSC_12_101:
-		anim_type = 0x81483a70;
+		draw_sram_anim = 0x8130bf34;
+		draw_rtc_anim = 0x8130bf24;
 		sound_level = 0x814837c0;
 		draw_cubes = 0x81310b04;
 		draw_outer = 0x8130d7b4;
 		draw_inner = 0x81310b40;
-		patch_ipl_anim(anim_type, sound_level, draw_cubes, draw_outer, draw_inner);
+		patch_ipl_anim(draw_sram_anim, draw_rtc_anim, sound_level, draw_cubes, draw_outer, draw_inner);
 		break;
 	case IPL_PAL_10_001:
-		anim_type = 0x814ad3b8;
+		draw_sram_anim = 0x8130be00;
+		draw_rtc_anim = 0x8130bdf0;
 		sound_level = 0x814ad118;
 		draw_cubes = 0x81310e94;
 		draw_outer = 0x8130d868;
 		draw_inner = 0x81310ed0;
-		patch_ipl_anim(anim_type, sound_level, draw_cubes, draw_outer, draw_inner);
+		patch_ipl_anim(draw_sram_anim, draw_rtc_anim, sound_level, draw_cubes, draw_outer, draw_inner);
 		break;
 	case IPL_MPAL_11:
-		anim_type = 0x8147c1d8;
+		draw_sram_anim = 0x8130bad4;
+		draw_rtc_anim = 0x8130bac4;
 		sound_level = 0x8147bf38;
 		draw_cubes = 0x81310680;
 		draw_outer = 0x8130d354;
 		draw_inner = 0x813106bc;
-		patch_ipl_anim(anim_type, sound_level, draw_cubes, draw_outer, draw_inner);
+		patch_ipl_anim(draw_sram_anim, draw_rtc_anim, sound_level, draw_cubes, draw_outer, draw_inner);
 		break;
 	case IPL_PAL_12_101:
-		anim_type = 0x814af6b0;
+		draw_sram_anim = 0x8130bf40;
+		draw_rtc_anim = 0x8130bf30;
 		sound_level = 0x814af400;
 		draw_cubes = 0x81310fd4;
 		draw_outer = 0x8130d9a8;
 		draw_inner = 0x81311010;
-		patch_ipl_anim(anim_type, sound_level, draw_cubes, draw_outer, draw_inner);
+		patch_ipl_anim(draw_sram_anim, draw_rtc_anim, sound_level, draw_cubes, draw_outer, draw_inner);
 		break;
 	default:
 		break;
