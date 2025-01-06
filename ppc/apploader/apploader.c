@@ -26,6 +26,7 @@
 #include "../../include/dol.h"
 
 #include "libc.h"
+#include "types.h"
 #include "usbgecko.h"
 
 #ifndef ATTRIBUTE_ALIGN
@@ -34,9 +35,6 @@
 #ifndef ATTRIBUTE_PACKED
 # define ATTRIBUTE_PACKED				__attribute__((packed))
 #endif
-
-typedef uint16_t u16;				///< 16bit unsigned integer
-typedef volatile u16 vu16;			///< 16bit unsigned volatile integer
 
 #define DI_ALIGN_SHIFT	5
 #define DI_ALIGN_SIZE	(1UL << DI_ALIGN_SHIFT)
@@ -135,50 +133,11 @@ static struct bootloader_control bl_control = { .size = ~0 };
 
 static unsigned char di_buffer[DI_SECTOR_SIZE] __attribute__ ((aligned(32))) = "sillyplaceholder";
 
-#if PATCH_IPL
-static void patch_ipl(void);
-static void skip_ipl_animation(void);
-#endif
-
-static u32 *signal_word = (void*)0x81700000;
-
 extern void save_ipl(void);
-extern void done_func(void);
-extern void run_code(void);
+extern void fix_ipl_state(void);
+extern void new_routine(void);
 extern void run(register void* entry_point);
 extern void run_interrupt(register void *entry_point);
-
-#define NEW_PPC_INSTR() 0
-
-#define PPC_OPCODE_B           18
-
-// fields
-#define PPC_OPCODE_MASK  0x3F
-#define PPC_OPCODE_SHIFT 26
-#define PPC_GET_OPCODE(instr)       ((instr           >> PPC_OPCODE_SHIFT) & PPC_OPCODE_MASK)
-#define PPC_SET_OPCODE(instr,opcode) (instr |= (opcode & PPC_OPCODE_MASK) << PPC_OPCODE_SHIFT)
-
-#define PPC_LI_MASK      0xFFFFFF
-#define PPC_LI_SHIFT     2
-#define PPC_GET_LI(instr)           ((instr       >> PPC_LI_SHIFT) & PPC_LI_MASK)
-#define PPC_SET_LI(instr,li)         (instr |= (li & PPC_LI_MASK) << PPC_LI_SHIFT)
-
-#define PPC_AA_MASK      0x1
-#define PPC_AA_SHIFT     1
-#define PPC_GET_AA(instr)           ((instr       >> PPC_AA_SHIFT) & PPC_AA_MASK)
-#define PPC_SET_AA(instr,aa)         (instr |= (aa & PPC_AA_MASK) << PPC_AA_SHIFT)
-
-#define PPC_LK_MASK      0x1
-#define PPC_LK_SHIFT     0
-#define PPC_GET_LK(instr)           ((instr       >> PPC_LK_SHIFT) & PPC_LK_MASK)
-#define PPC_SET_LK(instr,lk)         (instr |= (lk & PPC_LK_MASK) << PPC_LK_SHIFT)
-
-#define GEN_B(ppc,dst,aa,lk) \
-	{ ppc = NEW_PPC_INSTR(); \
-	  PPC_SET_OPCODE(ppc, PPC_OPCODE_B); \
-	  PPC_SET_LI    (ppc, (dst)); \
-	  PPC_SET_AA    (ppc, (aa)); \
-	  PPC_SET_LK    (ppc, (lk)); }
 
 /*
  * This is our particular "main".
@@ -188,190 +147,32 @@ void al_start(void **enter, void **load, void **exit)
 {
 	al_control.step = 0;
 	gprintf("al_start\n");
+	u32 *signal_word = (void*)0x81700000;
 	if (*signal_word != 0xfeedface) {
+		gprintf("Early code exec\n");
 		gprintf("INCEPTION\n");
 		*signal_word = 0xfeedface;
-		{
-			// allow any region
-			uint32_t *address = (uint32_t *)0x81300d50;
-			*address = 0x38600001; // li r3, 1
-			flush_dcache_range(address, address+1);
-			invalidate_icache_range(address, address+1);
-		}
-		{
-			// force tick main thread
-			uint32_t *address = (uint32_t *)0x81300654;
-			*address = 0x60000000; // nop
-			flush_dcache_range(address, address+1);
-			invalidate_icache_range(address, address+1);
-		}
 
+		fix_ipl_state();
 		save_ipl();
 
-		// *(u32*)0x8130bb6c = 0x38000000; // li r0, 2 (force menu)
-		// {
-		// 	u32 *target = (void*)0x8130bba8;
-		// 	GEN_B(*target, ((u32*)done_func - target), 0, 1);
-		// }
-		// {
-		// 	u32 *target = (void*)0x813010f0;
-		// 	GEN_B(*target, ((u32*)run_code - target), 0, 1);
-		// 	// TODO cache
-		// }
-
-		run_interrupt((void*)run_code);
-
-		// void (*start_prog)() = (void*)0x813021b4;
-		// start_prog();
-		// __builtin_unreachable();
+		run_interrupt((void*)new_routine);
 	}
 
 	*enter = al_enter;
 	*load = al_load;
 	*exit = al_exit;
-
-#ifdef DEBUG
-	gprintf("Early code exec\n");
-	// while(1);
-#endif
-
-#if PATCH_IPL
-
-	patch_ipl();
-#endif
 }
 
-// void _memset(void* s, int c, int count) {
-// 	char* xs = (char*)s;
-// 	while (count--)
-// 		*xs++ = c;
-// }
-
-void run_code() {
+void new_routine() {
+	// // allow any region
 	// {
-	// 	// skip threaded sleep
-	// 	uint32_t *address = (uint32_t *)0x81372e64;
-	// 	*address = 0x60000000; // nop
+	// 	uint32_t *address = (uint32_t *)0x81300d50;
+	// 	*address = 0x38600001; // li r3, 1
 	// 	flush_dcache_range(address, address+1);
 	// 	invalidate_icache_range(address, address+1);
 	// }
-	
-	// void (*GXDrawDone)() = (void*)0x81372e10;
-	void (*GXFlush)() = (void*)0x81372ce8;
-	void (*GXAbortFrame)() = (void*)0x81372d44;
-
-	*(u32*)0x8137ec6c = 0x6b80;
-	*(u32*)0x8137ec70 = 0xb580;
-	*(u32*)0x8137ec74 = 0xffe0;
-	*(u32*)0x8137ecc0 = 0x18760;
-	*(u32*)0x8137ecc4 = 0x1c900;
-	*(u32*)0x8137ed1c = 0x230e0;
-	*(u32*)0x8137ed20 = 0x23220;
-	*(u32*)0x8137ed24 = 0x2e080;
-	*(u32*)0x8137ed34 = 0x35e40;
-	*(u32*)0x8137ed38 = 0x37f00;
-	*(u32*)0x8137ed3c = 0x3cc00;
-	*(u32*)0x8137ed40 = 0x411c0;
-	*(u32*)0x8137ed44 = 0x45080;
-	*(u32*)0x8137ed48 = 0x45a60;
-
-	// _memset((void*)0x80001800, 0, 0x1800);
-	// _memset((void*)0x80003000, 0, 0x100);
-	// *(u32*)0x800030d8 = 0x006f66c5;
-	// *(u32*)0x800030dc = 0xe76aa800;
-
-	// _memset((void*)0x80700020, 0, 0xa00000);
-	// _memset((void*)0x8159d280, 0, 0x162d80);
-
-	GXFlush();
-	GXAbortFrame();
 	run((void*)0x81300000);
-
-	// void (*start_program)() = (void*)0x8130213c;
-	// while(1) {
-	// 	start_program();
-	// }
-}
-
-
-// DSPCR bits
-#define DSPCR_DSPRESET      0x0800        // Reset DSP
-#define DSPCR_DSPDMA        0x0200        // ARAM dma in progress, if set
-#define DSPCR_DSPINTMSK     0x0100        // * interrupt mask   (RW)
-#define DSPCR_DSPINT        0x0080        // * interrupt active (RWC)
-#define DSPCR_ARINTMSK      0x0040
-#define DSPCR_ARINT         0x0020
-#define DSPCR_AIINTMSK      0x0010
-#define DSPCR_AIINT         0x0008
-#define DSPCR_HALT          0x0004        // halt DSP
-#define DSPCR_PIINT         0x0002        // assert DSP PI interrupt
-#define DSPCR_RES           0x0001        // reset DSP
-
-#define _SHIFTL(v, s, w)	\
-    ((u32) (((u32)(v) & ((0x01 << (w)) - 1)) << (s)))
-#define _SHIFTR(v, s, w)	\
-    ((u32)(((u32)(v) >> (s)) & ((0x01 << (w)) - 1)))
-
-static vu16* const _dspReg = (u16*)0xCC005000;
-
-static __inline__ void __ARClearInterrupt()
-{
-	u16 cause;
-
-	cause = _dspReg[5]&~(DSPCR_DSPINT|DSPCR_AIINT);
-	_dspReg[5] = (cause|DSPCR_ARINT);
-}
-
-static __inline__ void __ARWaitDma()
-{
-	while(_dspReg[5]&DSPCR_DSPDMA);
-}
-
-static void __ARWriteDMA(u32 memaddr,u32 aramaddr,u32 len)
-{
-	// set main memory address
-	_dspReg[16] = (_dspReg[16]&~0x03ff)|_SHIFTR(memaddr,16,16);
-	_dspReg[17] = (_dspReg[17]&~0xffe0)|_SHIFTR(memaddr, 0,16);
-
-	// set aram address
-	_dspReg[18] = (_dspReg[18]&~0x03ff)|_SHIFTR(aramaddr,16,16);
-	_dspReg[19] = (_dspReg[19]&~0xffe0)|_SHIFTR(aramaddr, 0,16);
-
-	// set cntrl bits
-	_dspReg[20] = (_dspReg[20]&~0x8000);
-	_dspReg[20] = (_dspReg[20]&~0x03ff)|_SHIFTR(len,16,16);
-	_dspReg[21] = (_dspReg[21]&~0xffe0)|_SHIFTR(len, 0,16);
-
-	__ARWaitDma();
-	__ARClearInterrupt();
-}
-
-void save_ipl() {
-	const u32 aram_offset = 10 * 1024 * 1024;
-	const u32 ipl_size = 2 * 1024 * 1024;
-	__ARWriteDMA(0x81300000, aram_offset, ipl_size);
-}
-
-void run(register void* entry_point) {
-    asm("mfhid0	4");
-    asm("ori 4, 4, 0x0800");
-    asm("mthid0	4");
-    // hwsync
-    asm("sync");
-    asm("isync");
-    // boot
-    asm("mtlr %0" : : "r" (entry_point));
-    asm("blr");
-}
-
-
-void run_interrupt(register void *entry_point) {
-    asm("mtsrr0 %0" : : "r" (entry_point));
-
-    asm("li 4, 0x30");
-	asm("mtsrr1 4");
-
-    asm("rfi");
 }
 
 /*
@@ -493,14 +294,6 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 	if (al_control.report)
 		al_control.report("step %d\n", al_control.step);
 
-	// while(1);
-
-	// u32 caller0 = (u32)__builtin_return_address(0);
-	// u32 caller1 = (u32)__builtin_return_address(1);
-	// u32 caller2 = (u32)__builtin_return_address(2);
-	// u32 caller3 = (u32)__builtin_return_address(3);
-	// al_control.report("Callers = [%08x] [%08x] [%08x] [%08x]\n", caller0, caller1, caller2, caller3);
-
 	switch (al_control.step) {
 	case 0:
 		/* should not get here if al_enter was called */
@@ -571,7 +364,6 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 		bl_control.sects_bitmap = 0xdeadbeef;
 
 		al_control.step++;
-		while(1);
 		break;
 	case 5:
 		/* .dol header loaded */
@@ -658,10 +450,6 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 		lowmem->a_bi2 = (void *)al_control.bi2_address;
 		flush_dcache_range(lowmem, lowmem+1);
 
-#if PATCH_IPL
-		skip_ipl_animation();
-#endif
-
 		*length = 0;
 		need_more = 0;
 		al_control.step++;
@@ -684,380 +472,3 @@ static void *al_exit(void)
 {
 	return bl_control.entry_point;
 }
-
-__attribute__((used)) void done_func() {
-	gprintf("FOUND done func\n");
-	while(1);
-}
-
-#if PATCH_IPL
-
-/*
- *
- */
-enum ipl_revision {
-	IPL_UNKNOWN,
-	IPL_NTSC_10_001,
-	IPL_NTSC_10_002,
-	IPL_DEV_10,
-	IPL_NTSC_11_001,
-	IPL_PAL_10_001,
-	IPL_PAL_10_002,
-	IPL_MPAL_11,
-	IPL_TDEV_11,
-	IPL_NTSC_12_001,
-	IPL_NTSC_12_101,
-	IPL_PAL_12_101
-};
-
-static enum ipl_revision get_ipl_revision(void)
-{
-	register uint32_t sdata2 asm ("r2");
-	register uint32_t sdata asm ("r13");
-
-	if (sdata2 == 0x81465cc0 && sdata == 0x81465320)
-		return IPL_NTSC_10_001;
-	if (sdata2 == 0x81468fc0 && sdata == 0x814685c0)
-		return IPL_NTSC_10_002;
-	if (sdata2 == 0x814695e0 && sdata == 0x81468bc0)
-		return IPL_DEV_10;
-	if (sdata2 == 0x81489c80 && sdata == 0x81489120)
-		return IPL_NTSC_11_001;
-	if (sdata2 == 0x814b5b20 && sdata == 0x814b4fc0)
-		return IPL_PAL_10_001;
-	if (sdata2 == 0x814b4fc0 && sdata == 0x814b4400)
-		return IPL_PAL_10_002;
-	if (sdata2 == 0x81484940 && sdata == 0x81483de0)
-		return IPL_MPAL_11;
-	if (sdata2 == 0x8148fbe0 && sdata == 0x8148ef80)
-		return IPL_TDEV_11;
-	if (sdata2 == 0x8148a660 && sdata == 0x8148b1c0)
-		return IPL_NTSC_12_001;
-	if (sdata2 == 0x8148aae0 && sdata == 0x8148b640)
-		return IPL_NTSC_12_101;
-	if (sdata2 == 0x814b66e0 && sdata == 0x814b7280)
-		return IPL_PAL_12_101;
-
-	return IPL_UNKNOWN;
-}
-
-#define PPC_NOP 			0x60000000
-#define PPC_BLR 			0x4e800020
-#define PPC_NULL 			0x00000000
-
-static void patch_ipl_anim(uint32_t address_sound_level, uint32_t address_draw_cubes, uint32_t address_draw_outer, uint32_t address_draw_inner) {
-	uint32_t *address;
-
-	// disable sound (u16 + u8[2] padding)
-	address = (uint32_t *)address_sound_level;
-	*address = PPC_NULL;
-	flush_dcache_range(address, address+1);
-	invalidate_icache_range(address, address+1);
-
-	// disable cubes
-	address = (uint32_t *)address_draw_cubes;
-	*address = PPC_NOP;
-	flush_dcache_range(address, address+1);
-	invalidate_icache_range(address, address+1);
-
-	// disable outer
-	address = (uint32_t *)address_draw_outer;
-	*address = PPC_NOP;
-	flush_dcache_range(address, address+1);
-	invalidate_icache_range(address, address+1);
-
-	// disable inner
-	address = (uint32_t *)address_draw_inner;
-	*address = PPC_NOP;
-	flush_dcache_range(address, address+1);
-	invalidate_icache_range(address, address+1);
-}
-
-/*
- *
- */
-static void patch_ipl(void)
-{
-	uint32_t *start, *end;
-	uint32_t *address;
-
-	uint32_t sound_level;
-	uint32_t draw_cubes;
-	uint32_t draw_outer;
-	uint32_t draw_inner;
-
-	// hide anim and disable sound
-	switch (get_ipl_revision()) {
-	case IPL_NTSC_10_001:
-		sound_level = 0x8145d4d0;
-		draw_cubes = 0x8131055c;
-		draw_outer = 0x8130d224;
-		draw_inner = 0x81310598;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_NTSC_11_001:
-		sound_level = 0x81481278;
-		draw_cubes = 0x81310754;
-		draw_outer = 0x8130d428;
-		draw_inner = 0x81310790;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_NTSC_12_001:
-		sound_level = 0x81483340;
-		draw_cubes = 0x81310aec;
-		draw_outer = 0x8130d79c;
-		draw_inner = 0x81310b28;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_NTSC_12_101:
-		sound_level = 0x814837c0;
-		draw_cubes = 0x81310b04;
-		draw_outer = 0x8130d7b4;
-		draw_inner = 0x81310b40;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_PAL_10_001:
-		sound_level = 0x814ad118;
-		draw_cubes = 0x81310e94;
-		draw_outer = 0x8130d868;
-		draw_inner = 0x81310ed0;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_MPAL_11:
-		sound_level = 0x8147bf38;
-		draw_cubes = 0x81310680;
-		draw_outer = 0x8130d354;
-		draw_inner = 0x813106bc;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	case IPL_PAL_12_101:
-		sound_level = 0x814af400;
-		draw_cubes = 0x81310fd4;
-		draw_outer = 0x8130d9a8;
-		draw_inner = 0x81311010;
-		patch_ipl_anim(sound_level, draw_cubes, draw_outer, draw_inner);
-		break;
-	default:
-		break;
-	}
-
-	// disable region detection
-	switch (get_ipl_revision()) {
-	case IPL_NTSC_10_001:
-		start = (uint32_t *)0x81300a70;
-		end = (uint32_t *)0x813010b0;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x81300e88;
-			if (*address == 0x38000000)
-				*address |= 1;
-
-			address = (uint32_t *)0x81300ea0;
-			if (*address == 0x38000000)
-				*address |= 1;
-
-			address = (uint32_t *)0x81300ea8;
-			if (*address == 0x38000000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_NTSC_10_002:
-		start = (uint32_t *)0x813008d8;
-		end = (uint32_t *)0x8130096c;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x8130092c;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x81300944;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x8130094c;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_DEV_10:
-		start = (uint32_t *)0x81300dfc;
-		end = (uint32_t *)0x81301424;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x8130121c;
-			if (*address == 0x38000000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_NTSC_11_001:
-	case IPL_PAL_10_001:
-	case IPL_MPAL_11:
-		start = (uint32_t *)0x813006e8;
-		end = (uint32_t *)0x813007b8;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x8130077c;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x813007a0;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_PAL_10_002:
-		start = (uint32_t *)0x8130092c;
-		end = (uint32_t *)0x81300a10;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x813009d4;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x813009f8;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_TDEV_11:
-		start = (uint32_t *)0x81300b58;
-		end = (uint32_t *)0x81300c3c;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x81300c00;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x81300c24;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_NTSC_12_001:
-	case IPL_NTSC_12_101:
-		start = (uint32_t *)0x81300a24;
-		end = (uint32_t *)0x81300b08;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x81300acc;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x81300af0;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	case IPL_PAL_12_101:
-		start = (uint32_t *)0x813007d8;
-		end = (uint32_t *)0x813008bc;
-		if (start[0] == 0x7c0802a6 && end[-1] == 0x4e800020) {
-			address = (uint32_t *)0x81300880;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			address = (uint32_t *)0x813008a4;
-			if (*address == 0x38600000)
-				*address |= 1;
-
-			flush_dcache_range(start, end);
-			invalidate_icache_range(start, end);
-		}
-		break;
-	default:
-		break;
-	}
-}
-
-/*
- *
- */
-static void skip_ipl_animation(void)
-{
-	switch (get_ipl_revision()) {
-	case IPL_NTSC_10_001:
-		if (*(uint32_t *)0x8145d6d0 == 1
-			&& !(*(uint16_t *)0x8145f14c & 0x0100)
-			&& *(uint32_t *)0x8145d6f0 == 0x81465728)
-			*(uint8_t *)0x81465747 = 1;
-		break;
-	case IPL_NTSC_10_002:
-		if (*(uint32_t *)0x814609c0 == 1
-			&& !(*(uint16_t *)0x814624ec & 0x0100)
-			&& *(uint32_t *)0x814609e0 == 0x81468ac8)
-			*(uint8_t *)0x81468ae7 = 1;
-		break;
-	case IPL_DEV_10:
-		if (*(uint32_t *)0x81460fe0 == 1
-			&& !(*(uint16_t *)0x81462b0c & 0x0100)
-			&& *(uint32_t *)0x81461000 == 0x814690e8)
-			*(uint8_t *)0x81469107 = 1;
-		break;
-	case IPL_NTSC_11_001:
-		if (*(uint32_t *)0x81481518 == 1
-			&& !(*(uint16_t *)0x8148370c & 0x0100)
-			&& *(uint32_t *)0x81481538 == 0x81489e58)
-			*(uint8_t *)0x81489e77 = 1;
-		break;
-	case IPL_PAL_10_001:
-		if (*(uint32_t *)0x814ad3b8 == 1
-			&& !(*(uint16_t *)0x814af60c & 0x0100)
-			&& *(uint32_t *)0x814ad3d8 == 0x814b5d58)
-			*(uint8_t *)0x814b5d77 = 1;
-		break;
-	case IPL_PAL_10_002:
-		if (*(uint32_t *)0x814ac828 == 1
-			&& !(*(uint16_t *)0x814aeb2c & 0x0100)
-			&& *(uint32_t *)0x814ac848 == 0x814b5278)
-			*(uint8_t *)0x814b5297 = 1;
-		break;
-	case IPL_MPAL_11:
-		if (*(uint32_t *)0x8147c1d8 == 1
-			&& !(*(uint16_t *)0x8147e3cc & 0x0100)
-			&& *(uint32_t *)0x8147c1f8 == 0x81484b18)
-			*(uint8_t *)0x81484b37 = 1;
-		break;
-	case IPL_TDEV_11:
-		if (*(uint32_t *)0x81487438 == 1
-			&& !(*(uint16_t *)0x8148972c & 0x0100)
-			&& *(uint32_t *)0x81487458 == 0x8148fe78)
-			*(uint8_t *)0x8148fe97 = 1;
-		break;
-	case IPL_NTSC_12_001:
-		if (*(uint32_t *)0x814835f0 == 1
-			&& !(*(uint16_t *)0x81484cec & 0x0100)
-			&& *(uint32_t *)0x81483610 == 0x8148b438)
-			*(uint8_t *)0x8148b457 = 1;
-		break;
-	case IPL_NTSC_12_101:
-		if (*(uint32_t *)0x81483a70 == 1
-			&& !(*(uint16_t *)0x8148518c & 0x0100)
-			&& *(uint32_t *)0x81483a90 == 0x8148b8d8)
-			*(uint8_t *)0x8148b8f7 = 1;
-		break;
-	case IPL_PAL_12_101:
-		if (*(uint32_t *)0x814af6b0 == 1
-			&& !(*(uint16_t *)0x814b0dcc & 0x0100)
-			&& *(uint32_t *)0x814af6d0 == 0x814b7518)
-			*(uint8_t *)0x814b7537 = 1;
-		break;
-	default:
-		break;
-	}
-}
-
-#endif
