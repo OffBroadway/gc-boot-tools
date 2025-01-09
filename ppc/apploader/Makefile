@@ -13,7 +13,7 @@ CFLAGS := -O2
 apploader_entry_point = 81200000
 
 
-apploader_C_SRCS = apploader.c crc32.c libc.c tinyprintf.c usbgecko.c save.c boot.c hacks.c
+apploader_C_SRCS = apploader.c crc32.c libc.c ipl.c tinyprintf.c usbgecko.c save.c boot.c hacks.c
 apploader_C_OBJS = $(patsubst %.c, %.o, $(apploader_C_SRCS))
 
 apploader_SRCS = $(apploader_C_SRCS)
