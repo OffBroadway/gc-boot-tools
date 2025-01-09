@@ -101,9 +101,9 @@ struct dolphin_lowmem {
  *
  */
 
-static void al_enter(void (*report) (const char *text, ...));
-static int al_load(void **address, uint32_t * length, uint32_t * offset);
-static void *al_exit(void);
+void al_enter(void (*report) (const char *text, ...));
+int al_load(void **address, uint32_t * length, uint32_t * offset);
+void *al_exit(void);
 
 /*
  * 
@@ -133,11 +133,8 @@ static struct bootloader_control bl_control = { .size = ~0 };
 
 static unsigned char di_buffer[DI_SECTOR_SIZE] __attribute__ ((aligned(32))) = "sillyplaceholder";
 
-extern void save_ipl(void);
-extern void fix_ipl_state(void);
-extern void new_routine(void);
-extern void run(register void* entry_point);
-extern void run_interrupt(register void *entry_point);
+// only extern
+extern void inception(void);
 
 /*
  * This is our particular "main".
@@ -147,32 +144,11 @@ void al_start(void **enter, void **load, void **exit)
 {
 	al_control.step = 0;
 	gprintf("al_start\n");
-	u32 *signal_word = (void*)0x81700000;
-	if (*signal_word != 0xfeedface) {
-		gprintf("Early code exec\n");
-		gprintf("INCEPTION\n");
-		*signal_word = 0xfeedface;
-
-		fix_ipl_state();
-		save_ipl();
-
-		run_interrupt((void*)new_routine);
-	}
+	inception();
 
 	*enter = al_enter;
 	*load = al_load;
 	*exit = al_exit;
-}
-
-void new_routine() {
-	// // allow any region
-	// {
-	// 	uint32_t *address = (uint32_t *)0x81300d50;
-	// 	*address = 0x38600001; // li r3, 1
-	// 	flush_dcache_range(address, address+1);
-	// 	invalidate_icache_range(address, address+1);
-	// }
-	run((void*)0x81300000);
 }
 
 /*
@@ -264,7 +240,7 @@ static void al_check_dol(struct dol_header *h, int dol_length)
  * Initializes the apploader related stuff.
  * Called by the IPL.
  */
-static void al_enter(void (*report) (const char *text, ...))
+void al_enter(void (*report) (const char *text, ...))
 {
 	al_control.step = 1;
 #ifdef DEBUG
@@ -280,7 +256,7 @@ static void al_enter(void (*report) (const char *text, ...))
  * This is the apploader main processing function.
  * Called by the IPL.
  */
-static int al_load(void **address, uint32_t *length, uint32_t *offset)
+int al_load(void **address, uint32_t *length, uint32_t *offset)
 {
 	struct gcm_disk_header *disk_header;
 	struct gcm_disk_header_info *disk_header_info;
@@ -421,7 +397,8 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 #ifdef DEBUG
 			gprintf("BSS clear %08x len=%x\n", dh->address_bss, dh->size_bss);
 #else
-			al_control.report("BSS clear %08x len=%x\n", dh->address_bss, dh->size_bss);
+			if (al_control.report)
+				al_control.report("BSS clear %08x len=%x\n", dh->address_bss, dh->size_bss);
 #endif
 			/* setup .bss section */
 			if (dh->size_bss)
@@ -460,7 +437,7 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 		break;
 	}
 
-	al_control.report("MADE IT TO END OF STEP\n");
+	// al_control.report("MADE IT TO END OF STEP\n");
 
 	return need_more;
 }
@@ -468,7 +445,7 @@ static int al_load(void **address, uint32_t *length, uint32_t *offset)
 /*
  *
  */
-static void *al_exit(void)
+void *al_exit(void)
 {
 	return bl_control.entry_point;
 }

@@ -2,6 +2,7 @@
 /ppm2bnr/ppm2bnr
 /parse_gcm/parse_gcm
 /create_iso_header/create_iso_header
+*.map
 *.bin
 *.elf
 *.o

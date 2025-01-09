@@ -2,7 +2,19 @@
 #include <stddef.h>
 
 #include "types.h"
+#include "libc.h"
+
+#include "crc32.h"
 #include "usbgecko.h"
+
+void save_ipl(void);
+void fix_ipl_state(void);
+void new_routine(void);
+
+extern void run(register void* entry_point);
+extern void run_interrupt(register void *entry_point);
+extern void load_dol();
+extern void boot_dol();
 
 enum ipl_revision {
 	IPL_UNKNOWN,
@@ -83,12 +95,57 @@ void repair_asset_table(u32 asset_addr) {
 	}
 }
 
+typedef struct {
+    u16 magic;
+    u8 revision;
+    u8 padding;
+    u32 blob_checksum;
+    u32 code_size;
+    u32 code_checksum;
+} ipl_metadata_t;
+
+static void set_ipl_metadata(enum ipl_revision revision) {
+    u32 code_end_addr = 0;
+    if (*(u32*)0x81300310 == 0x81300000) {
+        code_end_addr = *(u32*)0x81300324;
+    } else {
+        code_end_addr = *(u32*)0x8130039c;
+    }
+    u32 code_size = code_end_addr - 0x81300000;
+    gprintf("Code size: %x\n", code_size);
+
+    ipl_metadata_t *metadata = (void*)0x81500000 - sizeof(ipl_metadata_t);
+    _memset(metadata, 0, sizeof(ipl_metadata_t));
+
+    // hash the blob
+    const u32 ipl_size = 2 * 1024 * 1024;
+    metadata->blob_checksum = tinf_crc32((void*)0x81300000, ipl_size);
+
+    // hash the code blob
+    metadata->code_size = code_size;
+    metadata->code_checksum = tinf_crc32((void*)0x81300000, code_size);
+
+    metadata->magic = 0xC0DE;
+    metadata->revision = (u8)revision;
+
+    // print metadata, one entry per line
+    gprintf("Metadata:\n");
+    gprintf("\tMagic: %x\n", metadata->magic);
+    gprintf("\tRevision: %x\n", metadata->revision);
+    gprintf("\tBlob checksum: %x\n", metadata->blob_checksum);
+    gprintf("\tCode size: %x\n", metadata->code_size);
+    gprintf("\tCode checksum: %x\n", metadata->code_checksum);
+
+    return;
+}
+
 void fix_ipl_state(void) {
 	void (*GXFlush)() = NULL;
 	void (*GXAbortFrame)() = NULL;
 	u32 asset_addr = 0;
 
-	switch (get_ipl_revision()) {
+    enum ipl_revision revision = get_ipl_revision();
+	switch (revision) {
 	case IPL_NTSC_10_001:
 		GXFlush = (void*)0x8134ac94;
 		GXAbortFrame = (void*)0x8134acfc;
@@ -135,4 +192,22 @@ void fix_ipl_state(void) {
 	GXFlush();
 	GXAbortFrame();
 	repair_asset_table(asset_addr);
+    set_ipl_metadata(revision);
+}
+
+void inception() {
+	u16 *signal_val = (void*)0x81300000;
+	if (*signal_val == 0x4800) {
+		gprintf("Early code exec\n");
+		gprintf("INCEPTION\n");
+		run_interrupt((void*)new_routine);
+	}
+}
+
+void new_routine() {
+    fix_ipl_state();
+    save_ipl();
+
+    load_dol();
+    boot_dol();
 }

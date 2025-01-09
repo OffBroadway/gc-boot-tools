@@ -1,4 +1,5 @@
 #include "types.h"
+#include "libc.h"
 
 // DSPCR bits
 #define DSPCR_DSPRESET      0x0800        // Reset DSP
@@ -53,7 +54,8 @@ static void __ARWriteDMA(u32 memaddr,u32 aramaddr,u32 len)
 }
 
 void save_ipl() {
-	const u32 aram_offset = 10 * 1024 * 1024;
+	const u32 aram_offset = 14 * 1024 * 1024;
 	const u32 ipl_size = 2 * 1024 * 1024;
 	__ARWriteDMA(0x81300000, aram_offset, ipl_size);
+	_memcpy((void*)0x81600000, (void*)0x81300000, ipl_size);
 }
