@@ -1,6 +1,8 @@
 #include "types.h"
 #include "libc.h"
 
+#include "../include/system.h"
+
 // DSPCR bits
 #define DSPCR_DSPRESET      0x0800        // Reset DSP
 #define DSPCR_DSPDMA        0x0200        // ARAM dma in progress, if set
@@ -56,6 +58,9 @@ static void __ARWriteDMA(u32 memaddr,u32 aramaddr,u32 len)
 void save_ipl() {
 	const u32 aram_offset = 14 * 1024 * 1024;
 	const u32 ipl_size = 2 * 1024 * 1024;
-	__ARWriteDMA(0x81300000, aram_offset, ipl_size);
-	_memcpy((void*)0x81600000, (void*)0x81300000, ipl_size);
+	const u32 ipl_start_addr = 0x81300000;
+	const u32 ipl_end_addr = ipl_start_addr + ipl_size;
+	flush_dcache_range((void*)ipl_start_addr, (void*)ipl_end_addr);
+	__ARWriteDMA(ipl_start_addr, aram_offset, ipl_size);
+	// _memcpy((void*)0x81600000, (void*)0x81300000, ipl_size);
 }
