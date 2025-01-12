@@ -134,25 +134,25 @@ u32 find_boot_func() {
 
 	switch (get_ipl_revision()) {
 	case IPL_NTSC_10_001:
-		func_addr = 0x81300938;
+		func_addr = 0x81302334;
 		break;
 	case IPL_NTSC_11_001:
-		func_addr = 0x81300830;
+		func_addr = 0x8130213c;
 		break;
 	case IPL_NTSC_12_001:
-		func_addr = 0x81300bb0;
+		func_addr = 0x813024f0;
 		break;
 	case IPL_NTSC_12_101:
-		func_addr = 0x81300bb4;
+		func_addr = 0x81302508;
 		break;
 	case IPL_PAL_10_001:
-		func_addr = 0x81300830;
+		func_addr = 0x8130213c;
 		break;
 	case IPL_MPAL_11:
-		func_addr = 0x81300830;
+		func_addr = 0x8130213c;
 		break;
 	case IPL_PAL_12_101:
-		func_addr = 0x81300968;
+		func_addr = 0x813022bc;
 		break;
 	default:
 		break;

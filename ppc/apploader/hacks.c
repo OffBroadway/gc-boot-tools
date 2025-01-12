@@ -127,10 +127,8 @@ void fix_ipl_state(void) {
     set_ipl_metadata(revision);
 }
 
-static u32 inception_flag = 0;
 void inception() {
-	if (get_ipl_revision() != IPL_UNKNOWN && inception_flag != 0xbeefcafe) {
-		inception_flag = 0xbeefcafe;
+	if (get_ipl_revision() != IPL_UNKNOWN) {
 		gprintf("Early code exec\n");
 		gprintf("INCEPTION\n");
 
@@ -140,7 +138,7 @@ void inception() {
 		// allow any region
 		{
 			uint32_t *target = (uint32_t *)find_region_check();
-			GEN_LI(*target, R0, 14);
+			GEN_LI(*target, R0, 16);
 			flush_dcache_range(target, target+1);
 			invalidate_icache_range(target, target+1);
 		}
@@ -162,7 +160,7 @@ void new_routine() {
 	void (*process)() = (void*)find_process_func();
 
 	while(1) {
-		if (*state >= 14) {
+		if (*state == 16) {
 			break;
 		}
 
@@ -172,7 +170,10 @@ void new_routine() {
 	gprintf("Program ready\n");
 
 	void (*boot)() = (void*)find_boot_func();
-	boot();
+	while(1) {
+		// needs to fill a counter
+		boot();
+	}
 
 	__builtin_unreachable();
 }
