@@ -4,18 +4,17 @@
 #include "types.h"
 #include "libc.h"
 #include "ipl.h"
+#include "addr.h"
 
 #include "crc32.h"
 #include "usbgecko.h"
 
+#include "instructions.h"
+#include "../include/system.h"
+
 void save_ipl(void);
 void fix_ipl_state(void);
 void new_routine(void);
-
-extern void run(register void* entry_point);
-extern void run_interrupt(register void *entry_point);
-extern void load_dol();
-extern void boot_dol();
 
 #define CONST(...) __VA_ARGS__
 
@@ -95,73 +94,85 @@ static void set_ipl_metadata(enum ipl_revision revision) {
 }
 
 void fix_ipl_state(void) {
-	void (*GXFlush)() = NULL;
-	void (*GXAbortFrame)() = NULL;
 	u32 asset_addr = 0;
 
     enum ipl_revision revision = get_ipl_revision();
 	switch (revision) {
 	case IPL_NTSC_10_001:
-		GXFlush = (void*)0x8134ac94;
-		GXAbortFrame = (void*)0x8134acfc;
 		asset_addr = 0x8135ea20;
 		break;
 	case IPL_NTSC_11_001:
-		GXFlush = (void*)0x81372ce8;
-		GXAbortFrame = (void*)0x81372d44;
 		asset_addr = 0x8137ec00;
 		break;
 	case IPL_NTSC_12_001:
-		GXFlush = (void*)0x81374d90;
-		GXAbortFrame = (void*)0x81374f58;
 		asset_addr = 0x8137fec0;
 		break;
 	case IPL_NTSC_12_101:
-		GXFlush = (void*)0x813751e4;
-		GXAbortFrame = (void*)0x813753ac;
 		asset_addr = 0x81380340;
 		break;
 	case IPL_PAL_10_001:
-		GXFlush = (void*)0x813762c8;
-		GXAbortFrame = (void*)0x81376324;
 		asset_addr = 0x81381820;
 		break;
 	case IPL_MPAL_11:
-		GXFlush = (void*)0x81372c08;
-		GXAbortFrame = (void*)0x81372c64;
 		asset_addr = 0x8137eb20;
 		break;
 	case IPL_PAL_12_101:
-		GXFlush = (void*)0x8137855c;
-		GXAbortFrame = (void*)0x81378724;
 		asset_addr = 0x81382cc0;
 		break;
 	default:
 		break;
 	}
 
-	// // Fake Draw Done
-	// *(u8*)0xCC008000 = 0x61;
-	// *(u32*)0xCC008000 = 0x45000002;
-
-	GXFlush();
-	GXAbortFrame();
 	repair_asset_table(asset_addr);
     set_ipl_metadata(revision);
 }
 
+static u32 inception_flag = 0;
 void inception() {
-	if (get_ipl_revision() != IPL_UNKNOWN) {
+	if (get_ipl_revision() != IPL_UNKNOWN && inception_flag != 0xbeefcafe) {
+		inception_flag = 0xbeefcafe;
 		gprintf("Early code exec\n");
 		gprintf("INCEPTION\n");
-		run_interrupt((void*)new_routine);
+
+		fix_ipl_state();
+		save_ipl();
+
+		// allow any region
+		{
+			uint32_t *target = (uint32_t *)find_region_check();
+			GEN_LI(*target, R0, 14);
+			flush_dcache_range(target, target+1);
+			invalidate_icache_range(target, target+1);
+		}
+
+		// take over main thread
+		{
+			u32 *target = (void*)find_loop_call();
+			GEN_B(*target, ((u32*)new_routine - target), 0, 1);
+			flush_dcache_range(target, target+1);
+			invalidate_icache_range(target, target+1);
+		}
 	}
 }
 
 void new_routine() {
-    fix_ipl_state();
-    save_ipl();
+	gprintf("New routine\n");
 
-    load_dol();
-    boot_dol();
+	u32* state = (u32*)find_state_addr();
+	void (*process)() = (void*)find_process_func();
+
+	while(1) {
+		if (*state >= 14) {
+			break;
+		}
+
+		process();
+	}
+
+	gprintf("Program ready\n");
+
+	void (*boot)() = (void*)find_boot_func();
+	boot();
+
+	__builtin_unreachable();
 }

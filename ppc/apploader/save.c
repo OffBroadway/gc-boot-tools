@@ -62,5 +62,4 @@ void save_ipl() {
 	const u32 ipl_end_addr = ipl_start_addr + ipl_size;
 	flush_dcache_range((void*)ipl_start_addr, (void*)ipl_end_addr);
 	__ARWriteDMA(ipl_start_addr, aram_offset, ipl_size);
-	// _memcpy((void*)0x81600000, (void*)0x81300000, ipl_size);
 }
