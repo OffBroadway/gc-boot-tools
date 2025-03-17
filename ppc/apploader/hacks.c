@@ -128,7 +128,8 @@ void fix_ipl_state(void) {
 }
 
 void inception() {
-	if (get_ipl_revision() != IPL_UNKNOWN) {
+	enum ipl_revision rev = get_ipl_revision();
+	if (rev != IPL_UNKNOWN && rev != IPL_DEV_10 && rev != IPL_TDEV_11) {
 		gprintf("Early code exec\n");
 		gprintf("INCEPTION\n");
 
